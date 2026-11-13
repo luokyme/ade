@@ -262,16 +262,9 @@ impl Render for TitleBar {
             })
             .children(self.render_restricted_mode(cx))
             .when(title_bar_settings.show_project_items, |title_bar| {
-                title_bar.children(self.render_project_host(cx))
-            })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-
-        let center = h_flex()
-            .flex_shrink_0()
-            .h_full()
-            .justify_center()
-            .when(title_bar_settings.show_project_items, |title_bar| {
-                title_bar.child(self.render_project_tabs(project_name, window, cx))
+                title_bar
+                    .children(self.render_project_host(cx))
+                    .child(self.render_project_tabs(project_name, window, cx))
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
@@ -297,7 +290,6 @@ impl Render for TitleBar {
                         .when(!has_status_bar, |left| left.flex_1())
                         .child(left),
                 )
-                .child(center)
                 .child(h_flex().flex_1().min_w_0().justify_end().child(right))
                 .into_any_element()]);
         });
