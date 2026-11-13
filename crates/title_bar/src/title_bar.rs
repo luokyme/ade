@@ -4,7 +4,6 @@ mod title_bar_settings;
 mod update_version;
 
 use crate::application_menu::{ApplicationMenu, show_menus};
-use arrayvec::ArrayVec;
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
     ShowNextWindowTab, ShowPreviousWindowTab,
@@ -28,10 +27,7 @@ use settings::Settings as _;
 
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
-use ui::{
-    ButtonLike, IconWithIndicator, Indicator, PopoverMenu, TintColor, Tooltip, prelude::*,
-    utils::platform_title_bar_height,
-};
+use ui::{ButtonLike, IconWithIndicator, Indicator, PopoverMenu, TintColor, Tooltip, prelude::*};
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
@@ -211,8 +207,6 @@ impl Render for TitleBar {
 
         let show_menus = show_menus();
 
-        let mut children = <ArrayVec<_, 5>>::new();
-
         let mut project_name = None;
         if let Some(worktree) = self.effective_active_worktree(cx) {
             let repository = self.get_repository_for_worktree(&worktree, cx);
@@ -254,70 +248,47 @@ impl Render for TitleBar {
             }
         }
 
-        children.push(
-            h_flex()
-                .h_full()
-                .gap_0p5()
-                .children(self.render_restricted_mode(cx))
-                .when(title_bar_settings.show_project_items, |title_bar| {
-                    title_bar
-                        .children(self.render_project_host(cx))
-                        .child(self.render_project_tabs(project_name, window, cx))
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .into_any_element(),
-        );
+        let left = h_flex()
+            .h_full()
+            .gap_0p5()
+            .when(show_menus, |title_bar| {
+                title_bar.children(self.application_menu.clone())
+            })
+            .children(self.render_restricted_mode(cx))
+            .when(title_bar_settings.show_project_items, |title_bar| {
+                title_bar.children(self.render_project_host(cx))
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
-        if title_bar_settings.show_onboarding_banner {
-            if let Some(banner) = &self.banner {
-                children.push(banner.clone().into_any_element())
-            }
-        }
+        let center = h_flex()
+            .flex_shrink_0()
+            .h_full()
+            .justify_center()
+            .when(title_bar_settings.show_project_items, |title_bar| {
+                title_bar.child(self.render_project_tabs(project_name, window, cx))
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
-        children.push(
-            h_flex()
-                .pr_1()
-                .gap_1()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(self.update_version.clone())
-                .into_any_element(),
-        );
+        let right = h_flex()
+            .pr_1()
+            .gap_1()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .when(title_bar_settings.show_onboarding_banner, |title_bar| {
+                title_bar.children(self.banner.clone())
+            })
+            .child(self.update_version.clone());
 
-        if show_menus {
-            self.platform_titlebar.update(cx, |this, _| {
-                this.set_button_layout(button_layout);
-                this.set_children(
-                    self.application_menu
-                        .clone()
-                        .map(|menu| menu.into_any_element()),
-                );
-            });
-
-            let height = platform_title_bar_height(window);
-            let title_bar_color = self.platform_titlebar.update(cx, |platform_titlebar, cx| {
-                platform_titlebar.title_bar_color(window, cx)
-            });
-
-            v_flex()
+        self.platform_titlebar.update(cx, |this, _| {
+            this.set_button_layout(button_layout);
+            this.set_children([h_flex()
                 .w_full()
-                .child(self.platform_titlebar.clone().into_any_element())
-                .child(
-                    h_flex()
-                        .bg(title_bar_color)
-                        .h(height)
-                        .pl_2()
-                        .justify_between()
-                        .w_full()
-                        .children(children),
-                )
-                .into_any_element()
-        } else {
-            self.platform_titlebar.update(cx, |this, _| {
-                this.set_button_layout(button_layout);
-                this.set_children(children);
-            });
-            self.platform_titlebar.clone().into_any_element()
-        }
+                .h_full()
+                .child(h_flex().flex_1().child(left))
+                .child(center)
+                .child(h_flex().flex_1().justify_end().child(right))
+                .into_any_element()]);
+        });
+        self.platform_titlebar.clone().into_any_element()
     }
 }
 
