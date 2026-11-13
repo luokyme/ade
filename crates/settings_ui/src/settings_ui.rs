@@ -509,6 +509,7 @@ fn init_renderers(cx: &mut App) {
         .add_dropdown_renderer::<settings::RestoreOnStartupBehavior>()
         .add_dropdown_renderer::<settings::BottomDockLayout>()
         .add_dropdown_renderer::<settings::ActivityBarPosition>()
+        .add_dropdown_renderer::<settings::StatusBarPosition>()
         .add_dropdown_renderer::<settings::OnLastWindowClosed>()
         .add_dropdown_renderer::<settings::CliDefaultOpenBehavior>()
         .add_dropdown_renderer::<settings::DefaultOpenBehavior>()

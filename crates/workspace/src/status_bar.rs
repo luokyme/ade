@@ -1,4 +1,4 @@
-use crate::{ItemHandle, MultiWorkspace, Pane};
+use crate::{ItemHandle, MultiWorkspace, Pane, Workspace};
 use gpui::{
     AnyView, App, Context, Decorations, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Role, SharedString, Styled, Subscription, WeakEntity, Window,
@@ -69,12 +69,23 @@ trait StatusItemViewHandle: Send {
 }
 
 pub struct StatusBar {
+    in_title_bar: bool,
     left_items: Vec<Box<dyn StatusItemViewHandle>>,
     right_items: Vec<Box<dyn StatusItemViewHandle>>,
     active_pane: Entity<Pane>,
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
     focus_handle: FocusHandle,
     _observe_active_pane: Subscription,
+}
+
+pub fn status_bar_menu_anchor(window: &Window, cx: &App) -> gpui::Anchor {
+    if Workspace::for_window(window, cx)
+        .is_some_and(|workspace| workspace.read(cx).status_bar_in_title_bar(cx))
+    {
+        gpui::Anchor::TopLeft
+    } else {
+        gpui::Anchor::BottomLeft
+    }
 }
 
 impl Focusable for StatusBar {
@@ -116,35 +127,41 @@ impl Render for StatusBar {
                     }
                 }),
             )
-            .w_full()
             .justify_between()
             .gap(DynamicSpacing::Base08.rems(cx))
             .p(DynamicSpacing::Base04.rems(cx))
-            .bg(cx.theme().colors().status_bar_background)
-            .map(|el| match window.window_decorations() {
-                Decorations::Server => el,
-                Decorations::Client { tiling, .. } => el
-                    .when(!(tiling.bottom || tiling.right), |el| {
-                        el.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
+            .when(self.in_title_bar, |bar| {
+                bar.min_w_0().max_w_full().overflow_x_scroll()
+            })
+            .when(!self.in_title_bar, |bar| {
+                bar.w_full()
+                    .bg(cx.theme().colors().status_bar_background)
+                    .map(|el| match window.window_decorations() {
+                        Decorations::Server => el,
+                        Decorations::Client { tiling, .. } => el
+                            .when(!(tiling.bottom || tiling.right), |el| {
+                                el.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
+                            })
+                            .when(!(tiling.bottom || tiling.left), |el| {
+                                el.rounded_bl(CLIENT_SIDE_DECORATION_ROUNDING)
+                            })
+                            // This border is to avoid a transparent gap in the rounded corners
+                            .mb(px(-1.))
+                            .mt({
+                                #[cfg(target_os = "linux")]
+                                let needs_gap_fix = {
+                                    // Running on Wayland and using some scaling levels other than 100% causes a
+                                    // 1px gap above the status bar; adding a margin avoids this.
+                                    gpui::guess_compositor() == "Wayland"
+                                        && window.scale_factor() != 1.0
+                                };
+                                #[cfg(not(target_os = "linux"))]
+                                let needs_gap_fix = false;
+                                if needs_gap_fix { px(-1.) } else { px(0.) }
+                            })
+                            .border_b(px(1.0))
+                            .border_color(cx.theme().colors().status_bar_background),
                     })
-                    .when(!(tiling.bottom || tiling.left), |el| {
-                        el.rounded_bl(CLIENT_SIDE_DECORATION_ROUNDING)
-                    })
-                    // This border is to avoid a transparent gap in the rounded corners
-                    .mb(px(-1.))
-                    .mt({
-                        #[cfg(target_os = "linux")]
-                        let needs_gap_fix = {
-                            // Running on Wayland and using some scaling levels other than 100% causes a
-                            // 1px gap above the status bar; adding a margin avoids this.
-                            gpui::guess_compositor() == "Wayland" && window.scale_factor() != 1.0
-                        };
-                        #[cfg(not(target_os = "linux"))]
-                        let needs_gap_fix = false;
-                        if needs_gap_fix { px(-1.) } else { px(0.) }
-                    })
-                    .border_b(px(1.0))
-                    .border_color(cx.theme().colors().status_bar_background),
             })
             .child(self.render_left_tools(cx))
             .child(self.render_right_tools(cx))
@@ -153,11 +170,14 @@ impl Render for StatusBar {
 
 impl StatusBar {
     fn render_left_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex().gap_1().min_w_0().overflow_x_hidden().children(
-            self.left_items.iter().enumerate().map(|(index, item)| {
+        h_flex()
+            .gap_1()
+            .min_w_0()
+            .when(self.in_title_bar, |tools| tools.flex_shrink_0())
+            .overflow_x_hidden()
+            .children(self.left_items.iter().enumerate().map(|(index, item)| {
                 render_hideable_item("status-bar-left", index, item.as_ref(), cx)
-            }),
-        )
+            }))
     }
 
     fn render_right_tools(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -212,6 +232,13 @@ pub fn add_hide_button_entry(menu: ContextMenu, hide: HideStatusItem) -> Context
 }
 
 impl StatusBar {
+    pub fn set_in_title_bar(&mut self, in_title_bar: bool, cx: &mut Context<Self>) {
+        if self.in_title_bar != in_title_bar {
+            self.in_title_bar = in_title_bar;
+            cx.notify();
+        }
+    }
+
     pub fn new(
         active_pane: &Entity<Pane>,
         multi_workspace: Option<WeakEntity<MultiWorkspace>>,
@@ -219,6 +246,7 @@ impl StatusBar {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut this = Self {
+            in_title_bar: false,
             left_items: Default::default(),
             right_items: Default::default(),
             active_pane: active_pane.clone(),

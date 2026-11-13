@@ -1488,9 +1488,12 @@ impl Render for PanelButtons {
             return h_flex();
         }
 
-        let (menu_anchor, menu_attach) = match dock.position {
-            DockPosition::Left => (Anchor::BottomLeft, Anchor::TopLeft),
-            DockPosition::Bottom | DockPosition::Right => (Anchor::BottomRight, Anchor::TopRight),
+        let in_title_bar = crate::status_bar_menu_anchor(window, cx) == Anchor::TopLeft;
+        let (menu_anchor, menu_attach) = match (dock.position, in_title_bar) {
+            (DockPosition::Left, true) => (Anchor::TopLeft, Anchor::BottomLeft),
+            (DockPosition::Left, false) => (Anchor::BottomLeft, Anchor::TopLeft),
+            (_, true) => (Anchor::TopRight, Anchor::BottomRight),
+            (_, false) => (Anchor::BottomRight, Anchor::TopRight),
         };
 
         let dock_entity = self.dock.clone();

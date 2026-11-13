@@ -1618,6 +1618,8 @@
   "status_bar": {
     // Whether to show the status bar.
     "experimental.show": true,
+    // Where to display the status bar: "title_bar" or "bottom".
+    "position": "title_bar",
     // Whether to show the name of the active file in the status bar.
     "show_active_file": false,
     // Whether to show the active language button in the status bar.

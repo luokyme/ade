@@ -3469,9 +3469,26 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn status_bar_section() -> [SettingsPageItem; 10] {
+    fn status_bar_section() -> [SettingsPageItem; 11] {
         [
             SettingsPageItem::SectionHeader(n!("Status Bar")),
+            SettingsPageItem::SettingItem(SettingItem {
+                title: n!("Status Bar Position"),
+                description: n!(
+                    "Display the status bar in the title bar or at the bottom of the window."
+                ),
+                field: Box::new(SettingField {
+                    json_path: Some("status_bar.position"),
+                    pick: |settings_content| {
+                        settings_content.status_bar.as_ref()?.position.as_ref()
+                    },
+                    write: |settings_content, value, _| {
+                        settings_content.status_bar.get_or_insert_default().position = value;
+                    },
+                }),
+                metadata: None,
+                files: USER,
+            }),
             SettingsPageItem::SettingItem(SettingItem {
                 title: n!("Project Panel Button"),
                 description: n!("Show the project panel button in the status bar."),

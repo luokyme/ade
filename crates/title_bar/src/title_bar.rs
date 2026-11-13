@@ -204,6 +204,12 @@ impl Render for TitleBar {
 
         let title_bar_settings = *TitleBarSettings::get_global(cx);
         let button_layout = title_bar_settings.button_layout;
+        let status_bar = self.workspace.upgrade().and_then(|workspace| {
+            let workspace = workspace.read(cx);
+            (workspace.status_bar_visible(cx) && workspace.status_bar_in_title_bar(cx))
+                .then(|| workspace.status_bar().clone())
+        });
+        let has_status_bar = status_bar.is_some();
 
         let show_menus = show_menus();
 
@@ -270,9 +276,11 @@ impl Render for TitleBar {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
         let right = h_flex()
+            .min_w_0()
             .pr_1()
             .gap_1()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .children(status_bar)
             .when(title_bar_settings.show_onboarding_banner, |title_bar| {
                 title_bar.children(self.banner.clone())
             })
@@ -283,9 +291,14 @@ impl Render for TitleBar {
             this.set_children([h_flex()
                 .w_full()
                 .h_full()
-                .child(h_flex().flex_1().child(left))
+                .child(
+                    h_flex()
+                        .when(has_status_bar, |left| left.flex_shrink_0())
+                        .when(!has_status_bar, |left| left.flex_1())
+                        .child(left),
+                )
                 .child(center)
-                .child(h_flex().flex_1().justify_end().child(right))
+                .child(h_flex().flex_1().min_w_0().justify_end().child(right))
                 .into_any_element()]);
         });
         self.platform_titlebar.clone().into_any_element()

@@ -595,6 +595,10 @@ pub struct StatusBarSettingsContent {
     /// Default: true
     #[serde(rename = "experimental.show")]
     pub show: Option<bool>,
+    /// Where to display the status bar: in the title bar or at the bottom of the window.
+    ///
+    /// Default: title_bar
+    pub position: Option<StatusBarPosition>,
     /// Whether to show the name of the active file in the status bar.
     ///
     /// Default: false
@@ -615,6 +619,27 @@ pub struct StatusBarSettingsContent {
     ///
     /// Default: non_utf8
     pub active_encoding_button: Option<EncodingDisplayOptions>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Default,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantNames,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarPosition {
+    #[default]
+    TitleBar,
+    Bottom,
 }
 
 #[derive(

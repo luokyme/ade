@@ -778,6 +778,7 @@ impl VsCodeSettings {
     fn status_bar_settings_content(&self) -> Option<StatusBarSettingsContent> {
         skip_default(StatusBarSettingsContent {
             show: self.read_bool("workbench.statusBar.visible"),
+            position: None,
             show_active_file: None,
             active_language_button: None,
             cursor_position_button: None,

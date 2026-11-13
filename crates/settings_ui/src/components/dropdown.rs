@@ -303,6 +303,7 @@ pub(crate) fn translated_setting_value(label: &str) -> Option<SharedString> {
         "System" => tc!("setting value", "System"),
         "TerminalControlled" => tc!("setting value", "Terminal Controlled"),
         "Top" => tc!("setting value", "Top"),
+        "TitleBar" => tc!("setting value", "Title Bar"),
         "TrackedFiles" => tc!("setting value", "Tracked Files"),
         "Trailing" => tc!("setting value", "Trailing"),
         "Underline" => tc!("setting value", "Underline"),

@@ -232,6 +232,7 @@ impl Settings for ActivityBarSettings {
 #[derive(Deserialize, RegisterSetting)]
 pub struct StatusBarSettings {
     pub show: bool,
+    pub position: settings::StatusBarPosition,
     pub show_active_file: bool,
     pub active_language_button: bool,
     pub cursor_position_button: bool,
@@ -244,6 +245,7 @@ impl Settings for StatusBarSettings {
         let status_bar = content.status_bar.clone().unwrap();
         StatusBarSettings {
             show: status_bar.show.unwrap(),
+            position: status_bar.position.unwrap_or_default(),
             show_active_file: status_bar.show_active_file.unwrap(),
             active_language_button: status_bar.active_language_button.unwrap(),
             cursor_position_button: status_bar.cursor_position_button.unwrap(),

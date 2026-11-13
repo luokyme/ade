@@ -11,7 +11,7 @@ use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use client::proto;
 use collections::HashSet;
 use editor::{Editor, EditorEvent};
-use gpui::{Action as _, Anchor, App, Entity, Subscription, Task, TaskExt, WeakEntity, actions};
+use gpui::{Action as _, App, Entity, Subscription, Task, TaskExt, WeakEntity, actions};
 use i18n::{n, t};
 use language::{BinaryStatus, BufferId, ServerHealth};
 use lsp::{LanguageServerId, LanguageServerName, LanguageServerSelector};
@@ -1374,7 +1374,7 @@ impl StatusItemView for LspButton {
 }
 
 impl Render for LspButton {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl ui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl ui::IntoElement {
         let is_restricted = self
             .server_state
             .read(cx)
@@ -1447,7 +1447,7 @@ impl Render for LspButton {
                         .ok()
                         .flatten()
                 })
-                .anchor(Anchor::BottomLeft)
+                .anchor(workspace::status_bar_menu_anchor(window, cx))
                 .with_handle(self.popover_menu_handle.clone())
                 .trigger_with_tooltip(
                     IconButton::new("zed-lsp-tool-button", IconName::BoltOutlined)

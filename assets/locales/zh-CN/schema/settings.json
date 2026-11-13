@@ -1,4 +1,5 @@
 {
+  "Where to display the status bar: in the title bar or at the bottom of the window.\n\nDefault: title_bar": "状态栏的显示位置：标题栏或窗口底部。\n\n默认值：title_bar",
   "A block that surrounds the following character": "包围后一个字符的方块",
   "A box drawn around the following character": "围绕后一个字符绘制的方框",
   "A capability for an extension.": "扩展的一项能力。",

@@ -114,12 +114,15 @@ use settings::{
 };
 
 use activity_bar::ActivityBar;
+use ade_actions::{Spawn, theme::ToggleMode};
 use sqlez::{
     bindable::{Bind, Column, StaticColumnCount},
     statement::Statement,
 };
 use status_bar::StatusBar;
-pub use status_bar::{HideStatusItem, StatusItemView, add_hide_button_entry};
+pub use status_bar::{
+    HideStatusItem, StatusItemView, add_hide_button_entry, status_bar_menu_anchor,
+};
 use std::{
     any::TypeId,
     borrow::Cow,
@@ -158,7 +161,6 @@ pub use workspace_settings::{
     FocusFollowsMouse, RestoreOnStartupBehavior, StatusBarSettings, TabBarSettings,
     WorkspaceSettings, closing_last_window_quits_app, observe_accessible_mode,
 };
-use ade_actions::{Spawn, theme::ToggleMode};
 
 use crate::{dock::PanelSizeState, item::ItemBufferKind, notifications::NotificationId};
 use crate::{
@@ -2682,6 +2684,11 @@ impl Workspace {
 
     pub fn status_bar_visible(&self, cx: &App) -> bool {
         StatusBarSettings::get_global(cx).show
+    }
+
+    pub fn status_bar_in_title_bar(&self, cx: &App) -> bool {
+        self.titlebar_item.is_some()
+            && StatusBarSettings::get_global(cx).position == settings::StatusBarPosition::TitleBar
     }
 
     pub fn multi_workspace(&self) -> Option<&WeakEntity<MultiWorkspace>> {
@@ -7498,9 +7505,11 @@ impl Workspace {
         ));
         // The status bar is an ARIA toolbar, so region navigation lands on its
         // first control rather than the toolbar container.
-        parts.push(FocusablePart::toolbar(
-            self.status_bar.read(cx).focus_handle(cx),
-        ));
+        if self.status_bar_visible(cx) && !self.status_bar_in_title_bar(cx) {
+            parts.push(FocusablePart::toolbar(
+                self.status_bar.read(cx).focus_handle(cx),
+            ));
+        }
         parts
     }
 
@@ -8143,6 +8152,10 @@ impl Render for DraggedDock {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let status_bar_in_title_bar = self.status_bar_in_title_bar(cx);
+        self.status_bar.update(cx, |status_bar, cx| {
+            status_bar.set_in_title_bar(status_bar_in_title_bar, cx);
+        });
         static FIRST_PAINT: AtomicBool = AtomicBool::new(true);
         if FIRST_PAINT.swap(false, std::sync::atomic::Ordering::Relaxed) {
             log::info!("Rendered first frame");
@@ -8635,9 +8648,10 @@ impl Render for Workspace {
                             }))
                             .children(self.render_notifications(window, cx)),
                     )
-                    .when(self.status_bar_visible(cx), |parent| {
-                        parent.child(self.status_bar.clone())
-                    })
+                    .when(
+                        self.status_bar_visible(cx) && !status_bar_in_title_bar,
+                        |parent| parent.child(self.status_bar.clone()),
+                    )
                     .child(self.toast_layer.clone()),
             )
     }
@@ -16959,6 +16973,41 @@ mod tests {
         workspace.read_with(cx, |workspace, cx| {
             let visible = workspace.status_bar_visible(cx);
             assert!(visible, "Status bar should be visible by default");
+            assert_eq!(
+                StatusBarSettings::get_global(cx).position,
+                settings::StatusBarPosition::TitleBar
+            );
+            assert!(!workspace.status_bar_in_title_bar(cx));
+        });
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.titlebar_item = Some(cx.new(|_| gpui::Empty).into());
+            assert!(workspace.status_bar_in_title_bar(cx));
+            let status_focus = workspace.status_bar.read(cx).focus_handle(cx);
+            assert!(
+                workspace
+                    .focusable_parts(cx)
+                    .iter()
+                    .all(|part| part.container != status_focus)
+            );
+        });
+
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            store.update_user_settings(cx, |settings| {
+                settings.status_bar.get_or_insert_default().position =
+                    Some(settings::StatusBarPosition::Bottom);
+            });
+        });
+        workspace.read_with(cx, |workspace, cx| {
+            assert!(!workspace.status_bar_in_title_bar(cx));
+            assert!(workspace.status_bar_visible(cx));
+            let status_focus = workspace.status_bar.read(cx).focus_handle(cx);
+            assert!(
+                workspace
+                    .focusable_parts(cx)
+                    .iter()
+                    .any(|part| part.container == status_focus)
+            );
         });
 
         // Test with status bar hidden
@@ -16971,18 +17020,28 @@ mod tests {
         workspace.read_with(cx, |workspace, cx| {
             let visible = workspace.status_bar_visible(cx);
             assert!(!visible, "Status bar should be hidden when show is false");
+            let status_focus = workspace.status_bar.read(cx).focus_handle(cx);
+            assert!(
+                workspace
+                    .focusable_parts(cx)
+                    .iter()
+                    .all(|part| part.container != status_focus)
+            );
         });
 
         // Test with status bar shown explicitly
         cx.update_global(|store: &mut SettingsStore, cx| {
             store.update_user_settings(cx, |settings| {
                 settings.status_bar.get_or_insert_default().show = Some(true);
+                settings.status_bar.get_or_insert_default().position =
+                    Some(settings::StatusBarPosition::TitleBar);
             });
         });
 
         workspace.read_with(cx, |workspace, cx| {
             let visible = workspace.status_bar_visible(cx);
             assert!(visible, "Status bar should be visible when show is true");
+            assert!(workspace.status_bar_in_title_bar(cx));
         });
     }
 
@@ -17313,9 +17372,9 @@ mod tests {
 
     #[gpui::test]
     async fn test_toggle_theme_mode_persists_and_updates_active_theme(cx: &mut TestAppContext) {
+        use ade_actions::theme::ToggleMode;
         use settings::{ThemeName, ThemeSelection};
         use theme::SystemAppearance;
-        use ade_actions::theme::ToggleMode;
 
         init_test(cx);
 

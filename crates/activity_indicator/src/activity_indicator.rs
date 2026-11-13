@@ -769,7 +769,7 @@ impl EventEmitter<Event> for ActivityIndicator {}
 const MAX_MESSAGE_LEN: usize = 50;
 
 impl Render for ActivityIndicator {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let result = h_flex()
             .id("activity-indicator")
             .on_action(cx.listener(Self::show_error_message))
@@ -818,7 +818,7 @@ impl Render for ActivityIndicator {
                         }))
                     }),
                 )
-                .anchor(gpui::Anchor::BottomLeft)
+                .anchor(workspace::status_bar_menu_anchor(window, cx))
                 .when(!has_click_handler, |this| {
                     this.menu(move |window, cx| {
                         let strong_this = activity_indicator.upgrade()?;
