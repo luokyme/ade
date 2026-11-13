@@ -12493,7 +12493,6 @@ dependencies = [
  "client",
  "db",
  "fs",
- "git_ui_core",
  "gpui",
  "i18n",
  "icons",

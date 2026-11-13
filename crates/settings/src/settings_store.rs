@@ -2125,10 +2125,10 @@ mod tests {
             }
             "#
             .unindent(),
-            |settings| settings.title_bar.get_or_insert_default().show_branch_name = Some(true),
+            |settings| settings.title_bar.get_or_insert_default().show_project_items = Some(true),
             r#"{
               "title_bar": {
-                "show_branch_name": true
+                "show_project_items": true
               }
             }
             "#

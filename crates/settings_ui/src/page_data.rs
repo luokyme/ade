@@ -3646,72 +3646,6 @@ fn window_and_layout_page() -> SettingsPage {
         [
             SettingsPageItem::SectionHeader(n!("Title Bar")),
             SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Show Branch Status Icon"),
-                description: n!("Show git status indicators on the branch icon in the titlebar."),
-                field: Box::new(SettingField {
-                    json_path: Some("title_bar.show_branch_status_icon"),
-                    pick: |settings_content| {
-                        settings_content
-                            .title_bar
-                            .as_ref()?
-                            .show_branch_status_icon
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .title_bar
-                            .get_or_insert_default()
-                            .show_branch_status_icon = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Show Branch Name"),
-                description: n!("Show the branch name button in the titlebar."),
-                field: Box::new(SettingField {
-                    json_path: Some("title_bar.show_branch_name"),
-                    pick: |settings_content| {
-                        settings_content
-                            .title_bar
-                            .as_ref()?
-                            .show_branch_name
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .title_bar
-                            .get_or_insert_default()
-                            .show_branch_name = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Show Worktree Name"),
-                description: n!("Show the worktree name button in the titlebar."),
-                field: Box::new(SettingField {
-                    json_path: Some("title_bar.show_worktree_name"),
-                    pick: |settings_content| {
-                        settings_content
-                            .title_bar
-                            .as_ref()?
-                            .show_worktree_name
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .title_bar
-                            .get_or_insert_default()
-                            .show_worktree_name = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
                 title: n!("Show Project Items"),
                 description: n!("Show the project host and name in the titlebar."),
                 field: Box::new(SettingField {
@@ -3750,24 +3684,6 @@ fn window_and_layout_page() -> SettingsPage {
                             .title_bar
                             .get_or_insert_default()
                             .show_onboarding_banner = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Show Menus"),
-                description: n!("Show the menus in the titlebar."),
-                field: Box::new(SettingField {
-                    json_path: Some("title_bar.show_menus"),
-                    pick: |settings_content| {
-                        settings_content.title_bar.as_ref()?.show_menus.as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .title_bar
-                            .get_or_insert_default()
-                            .show_menus = value;
                     },
                 }),
                 metadata: None,

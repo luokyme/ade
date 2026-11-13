@@ -37,7 +37,6 @@ chrono.workspace = true
 client.workspace = true
 db.workspace = true
 
-git_ui_core.workspace = true
 gpui.workspace = true
 icons.workspace = true
 project.workspace = true

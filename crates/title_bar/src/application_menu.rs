@@ -1,6 +1,6 @@
 use gpui::{Action, Entity, OwnedMenu, OwnedMenuItem, Subscription, actions};
 use i18n::t;
-use settings::{Settings, SettingsStore};
+use settings::SettingsStore;
 use workspace::AccessibleMode;
 
 use schemars::JsonSchema;
@@ -8,8 +8,6 @@ use serde::Deserialize;
 
 use smallvec::SmallVec;
 use ui::{ContextMenu, PopoverMenu, PopoverMenuHandle, Tooltip, prelude::*};
-
-use crate::title_bar_settings::TitleBarSettings;
 
 actions!(
     app_menu,
@@ -281,7 +279,7 @@ impl ApplicationMenu {
     }
 
     pub fn all_menus_shown(&self, cx: &mut Context<Self>) -> bool {
-        show_menus(cx)
+        show_menus()
             || self.entries.iter().any(|entry| entry.handle.is_deployed())
             || self.pending_menu_open.is_some()
             // In accessible mode, keep the full menu bar expanded so every menu
@@ -290,9 +288,13 @@ impl ApplicationMenu {
     }
 }
 
-pub(crate) fn show_menus(cx: &mut App) -> bool {
-    TitleBarSettings::get_global(cx).show_menus
-        && (cfg!(not(target_os = "macos")) || option_env!("ZED_USE_CROSS_PLATFORM_MENU").is_some())
+/// Whether the client-side menu bar is shown.
+///
+/// The menu bar is always visible on platforms that don't provide a native one.
+/// macOS keeps using the system menu bar unless the cross-platform menu is
+/// enabled at build time.
+pub(crate) fn show_menus() -> bool {
+    cfg!(not(target_os = "macos")) || option_env!("ZED_USE_CROSS_PLATFORM_MENU").is_some()
 }
 
 impl Render for ApplicationMenu {
