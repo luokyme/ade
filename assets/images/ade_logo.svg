@@ -1,21 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <title>Ade – geometric A</title>
+  <title>Ade</title>
 
-  <path
-    fill="#181a21"
-    d="M292 64C160 64 64 160 64 292v440c0 132 96 228 228 228h440c132 0 228-96 228-228V292C960 160 864 64 732 64H292Z"
-  />
+  <path fill="#181a21" d="M292 64C160 64 64 160 64 292v440c0 132 96 228 228 228h440c132 0 228-96 228-228V292C960 160 864 64 732 64H292Z"/>
 
-  <!-- The mark's measured bounds are centered at (512, 512). -->
-  <g transform="translate(0 -30)">
-    <!-- Bold A: pointed apex, straight flanks, hollow counter. Built to survive at 16–32 px. -->
-    <path
-      fill="#F0EEF4"
-      fill-rule="evenodd"
-      d="M512 240 300 780h424L512 240Zm0 274-104 266h208L512 514Z"
-    />
+  <defs>
+    <clipPath id="ade-accent-half">
+      <rect x="16" y="-32" width="64" height="96"/>
+    </clipPath>
+  </defs>
 
-    <!-- Crossbar, cut on the slope of the flanks so it reads as one glyph. -->
-    <path fill="#7AA2F7" d="M375 590h274l36 90H339l36-90Z" />
+  <g transform="translate(227.556 238.222) scale(17.7778)">
+    <path fill="#F0EEF4" d="M5.428 28.000L14.121 4.116A2.000 2.000 0 0 1 17.879 4.116L26.572 28.000L22.316 28.000L14.121 5.484A2.000 2.000 0 0 0 17.879 5.484L9.684 28.000Z"/>
+    <path fill="#7AA2F7" clip-path="url(#ade-accent-half)" d="M5.428 28.000L14.121 4.116A2.000 2.000 0 0 1 17.879 4.116L26.572 28.000L22.316 28.000L14.121 5.484A2.000 2.000 0 0 0 17.879 5.484L9.684 28.000Z"/>
   </g>
 </svg>
