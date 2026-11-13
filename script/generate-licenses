@@ -8,8 +8,8 @@ TEMPLATE_FILE="script/licenses/template.md.hbs"
 
 fail_on_stderr() {
     local tmpfile=$(mktemp)
-    "$@" 2> >(tee "$tmpfile" >&2)
-    local rc=$?
+    local rc=0
+    "$@" 2> >(tee "$tmpfile" >&2) || rc=$?
     [ -s "$tmpfile" ] && rc=1
     rm "$tmpfile"
     return $rc
@@ -34,15 +34,28 @@ else
     echo "cargo-about@$CARGO_ABOUT_VERSION is already installed."
 fi
 
-echo "Generating cargo licenses"
+echo "Generating cargo licenses (recursively scanning dependency sources; this can take several minutes)"
 if [ -z "${ALLOW_MISSING_LICENSES-}" ]; then FAIL_FLAG=--fail; else FAIL_FLAG=""; fi
 if [ -z "${ALLOW_MISSING_LICENSES-}" ]; then WRAPPER=fail_on_stderr; else WRAPPER=""; fi
-set -x
+scan_started=$SECONDS
+report_progress() {
+    while sleep 15; do
+        echo "License scan still running ($((SECONDS - scan_started))s elapsed)..." >&2
+    done
+}
+report_progress &
+progress_pid=$!
+stop_progress() {
+    kill "$progress_pid" 2>/dev/null || true
+    wait "$progress_pid" 2>/dev/null || true
+}
+trap stop_progress EXIT
 $WRAPPER cargo about generate \
     $FAIL_FLAG \
     -c script/licenses/zed-licenses.toml \
     "$TEMPLATE_FILE" >>"$OUTPUT_FILE"
-set +x
+stop_progress
+trap - EXIT
 
 sed -i.bak 's/&quot;/"/g' "$OUTPUT_FILE"
 sed -i.bak 's/&#x27;/'\''/g' "$OUTPUT_FILE" # The ` '\'' ` thing ends the string, appends a single quote, and re-opens the string
