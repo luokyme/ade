@@ -918,6 +918,7 @@ impl ChatView {
         let accent = accent(cx);
         let mut style = MarkdownStyle::themed(MarkdownFont::Editor, window, cx);
         style.base_text_style.font_size = ui(14.).into();
+        style.container_style.text.font_size = Some(ui(14.).into());
         style.base_text_style.line_height = ui(22.).into();
         style.base_text_style.color = colors.text;
         style.paragraph_spacing = px(MD_BLOCK_GAP);
