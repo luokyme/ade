@@ -209,8 +209,6 @@ impl Render for TitleBar {
             (workspace.status_bar_visible(cx) && workspace.status_bar_in_title_bar(cx))
                 .then(|| workspace.status_bar().clone())
         });
-        let has_status_bar = status_bar.is_some();
-
         let show_menus = show_menus();
 
         let mut project_name = None;
@@ -291,12 +289,9 @@ impl Render for TitleBar {
             this.set_children([h_flex()
                 .w_full()
                 .h_full()
-                .child(
-                    h_flex()
-                        .when(has_status_bar, |left| left.flex_shrink_0())
-                        .when(!has_status_bar, |left| left.flex_1())
-                        .child(left),
-                )
+                // Both side groups grow equally, so the project entry in the middle
+                // stays centered in the title bar no matter how wide the sides are.
+                .child(h_flex().flex_1().min_w_0().child(left))
                 .child(center)
                 .child(h_flex().flex_1().min_w_0().justify_end().child(right))
                 .into_any_element()]);
