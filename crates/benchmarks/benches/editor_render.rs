@@ -16,7 +16,7 @@ use settings::{
 };
 use theme::ActiveTheme as _;
 use util::{RandomCharIter, paths::PathStyle, rel_path::RelPath};
-use wu_actions::editor::{MoveDown, MoveUp};
+use ade_actions::editor::{MoveDown, MoveUp};
 
 struct BenchFile {
     path: Arc<RelPath>,

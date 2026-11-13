@@ -402,19 +402,19 @@ impl ActivityBar {
             )
             .menu(|window, cx| {
                 ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action(t!("Settings"), wu_actions::OpenSettings.boxed_clone())
-                        .action(t!("Keymap"), Box::new(wu_actions::OpenKeymap))
+                    menu.action(t!("Settings"), ade_actions::OpenSettings.boxed_clone())
+                        .action(t!("Keymap"), Box::new(ade_actions::OpenKeymap))
                         .action(
                             t!("Themes…"),
-                            wu_actions::theme_selector::Toggle::default().boxed_clone(),
+                            ade_actions::theme_selector::Toggle::default().boxed_clone(),
                         )
                         .action(
                             t!("Icon Themes…"),
-                            wu_actions::icon_theme_selector::Toggle::default().boxed_clone(),
+                            ade_actions::icon_theme_selector::Toggle::default().boxed_clone(),
                         )
                         .action(
                             t!("Extensions"),
-                            wu_actions::Extensions::default().boxed_clone(),
+                            ade_actions::Extensions::default().boxed_clone(),
                         )
                 })
                 .into()

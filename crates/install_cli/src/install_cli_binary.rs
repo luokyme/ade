@@ -1,4 +1,4 @@
-use super::register_wu_scheme;
+use super::register_ade_scheme;
 use anyhow::Result;
 use gpui::{AppContext as _, AsyncApp, Context, PromptButton, PromptLevel, Window, actions};
 use i18n::t;
@@ -13,13 +13,13 @@ use workspace::{Toast, Workspace};
 actions!(
     cli,
     [
-        /// Installs the Wu CLI tool to the system PATH.
+        /// Installs the Ade CLI tool to the system PATH.
         InstallCliBinary,
     ]
 );
 
 const CANT_INSTALL_DOCS_URL: &str =
-    "https://github.com/dstrml/wu/blob/main/docs/INSTALL.md#command-line";
+    "https://github.com/dstrml/ade/blob/main/docs/INSTALL.md#command-line";
 
 /// Attempts to install the CLI symlink. Returns the installed path on success,
 /// or `None` if the user dismissed the macOS administrator authentication
@@ -27,7 +27,7 @@ const CANT_INSTALL_DOCS_URL: &str =
 /// commonly because the user is not an admin.
 async fn install_script(cx: &AsyncApp) -> Result<Option<PathBuf>> {
     let cli_path = cx.update(|cx| cx.path_for_auxiliary_executable("cli"))?;
-    let link_path = Path::new("/usr/local/bin/wu");
+    let link_path = Path::new("/usr/local/bin/ade");
     let bin_dir_path = link_path.parent().unwrap();
 
     // Don't re-create symlink if it points to the same CLI binary.
@@ -88,7 +88,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 PromptLevel::Warning,
                 &t!("CLI should already be installed"),
                 Some(&t!(
-                    "If you installed Wu from our official release add ~/.local/bin to your PATH.\n\nIf you installed Wu from a different source like your package manager, then you may need to create an alias/symlink manually.\n\nDepending on your package manager, the CLI might be named zeditor, zedit, zed-editor or something else."
+                    "If you installed Ade from our official release add ~/.local/bin to your PATH.\n\nIf you installed Ade from a different source like your package manager, then you may need to create an alias/symlink manually.\n\nDepending on your package manager, the CLI might be named zeditor, zedit, zed-editor or something else."
                 )),
                 &[PromptButton::ok(t!("OK"))],
             );
@@ -100,7 +100,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
             // The user dismissed the administrator prompt; nothing to do.
             Ok(None) => return Ok(()),
             Err(error) => {
-                log::error!("failed to install wu CLI: {error:#}");
+                log::error!("failed to install ade CLI: {error:#}");
                 workspace.update(cx, |workspace, cx| {
                     struct CliInstallFailed;
 
@@ -110,10 +110,10 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                         |cx| {
                             cx.new(|cx| {
                                 MessageNotification::new(
-                                    t!("You can add `wu` to your PATH manually."),
+                                    t!("You can add `ade` to your PATH manually."),
                                     cx,
                                 )
-                                .with_title(t!("Couldn't install the Wu CLI"))
+                                .with_title(t!("Couldn't install the Ade CLI"))
                                 .more_info_message(t!("Show me how"))
                                 .more_info_url(CANT_INSTALL_DOCS_URL)
                             })
@@ -131,7 +131,7 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 Toast::new(
                     NotificationId::unique::<InstalledZedCli>(),
                     t!(
-                        "Installed `wu` to {path}. You can launch {app} from your terminal.",
+                        "Installed `ade` to {path}. You can launch {app} from your terminal.",
                         path = path.to_string_lossy(),
                         app = ReleaseChannel::global(cx).display_name()
                     )
@@ -140,8 +140,8 @@ pub fn install_cli_binary(window: &mut Window, cx: &mut Context<Workspace>) {
                 cx,
             )
         })?;
-        register_wu_scheme(cx).await.log_err();
+        register_ade_scheme(cx).await.log_err();
         Ok(())
     })
-    .detach_and_prompt_err(&t!("Cannot install the Wu CLI"), window, cx, |_, _, _| None);
+    .detach_and_prompt_err(&t!("Cannot install the Ade CLI"), window, cx, |_, _, _| None);
 }

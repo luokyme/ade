@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/ade",
+    "crates/ade_actions",
+    "crates/ade_env_vars",
     "crates/activity_indicator",
     "crates/agent_chat",
     "crates/agent_harness",
@@ -165,9 +168,6 @@ members = [
     "crates/workspace",
     "crates/worktree",
     "crates/worktree_benchmarks",
-    "crates/wu",
-    "crates/wu_actions",
-    "crates/wu_env_vars",
     "crates/zlog",
     "crates/zlog_settings",
     "crates/ztracing",
@@ -189,7 +189,7 @@ members = [
     "tooling/perf",
     "tooling/xtask",
 ]
-default-members = ["crates/wu"]
+default-members = ["crates/ade"]
 
 [workspace.package]
 publish = false
@@ -201,6 +201,8 @@ edition = "2024"
 # Workspace member crates
 #
 
+ade_actions = { path = "crates/ade_actions" }
+ade_env_vars = { path = "crates/ade_env_vars" }
 activity_indicator = { path = "crates/activity_indicator" }
 agent_chat = { path = "crates/agent_chat" }
 agent_harness = { path = "crates/agent_harness" }
@@ -355,8 +357,6 @@ util_macros = { path = "crates/util_macros" }
 watch = { path = "crates/watch" }
 workspace = { path = "crates/workspace" }
 worktree = { path = "crates/worktree" }
-wu_actions = { path = "crates/wu_actions" }
-wu_env_vars = { path = "crates/wu_env_vars" }
 zlog = { path = "crates/zlog" }
 zlog_settings = { path = "crates/zlog_settings" }
 ztracing = { path = "crates/ztracing" }
@@ -893,7 +893,7 @@ snippets_ui = { codegen-units = 1 }
 theme_selector = { codegen-units = 1 }
 time_format = { codegen-units = 1 }
 ui_input = { codegen-units = 1 }
-wu_actions = { codegen-units = 1 }
+ade_actions = { codegen-units = 1 }
 
 [profile.release]
 debug = "line-tables-only"

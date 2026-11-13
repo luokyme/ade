@@ -59,10 +59,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
       - name: Use the stable release channel
-        run: echo stable > crates/wu/RELEASE_CHANNEL
+        run: echo stable > crates/ade/RELEASE_CHANNEL
       - name: Generate licenses
         run: script/generate-licenses
-      - name: Build wu like script/bundle-linux does
+      - name: Build ade like script/bundle-linux does
         run: |
           set -euxo pipefail
           "$CC" --version
@@ -78,15 +78,15 @@ jobs:
             icf_args=(-C link-arg=-Wl,--icf=safe)
           fi
           export ZED_BUNDLE=true
-          export RELEASE_VERSION="$(script/get-crate-version wu)"
+          export RELEASE_VERSION="$(script/get-crate-version ade)"
           export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C link-args=-Wl,--disable-new-dtags,-rpath,\$ORIGIN/../lib"
-          cargo --config "$config" rustc --release --target aarch64-unknown-linux-gnu --package wu --bin wu -- \
+          cargo --config "$config" rustc --release --target aarch64-unknown-linux-gnu --package ade --bin ade -- \
             -C linker="$CC" -C llvm-args=-addrsig -C link-arg=-fuse-ld=lld "${icf_args[@]}"
-          readelf -p .comment target/aarch64-unknown-linux-gnu/release/wu
-      - name: Run wu and check for a crash
+          readelf -p .comment target/aarch64-unknown-linux-gnu/release/ade
+      - name: Run ade and check for a crash
         run: |
           set +e -uo pipefail
-          binary="$PWD/target/aarch64-unknown-linux-gnu/release/wu"
+          binary="$PWD/target/aarch64-unknown-linux-gnu/release/ade"
           home="$(mktemp -d)"
           timeout 30 env -i HOME="$home" PATH=/usr/bin:/bin "$binary"
           status=$?

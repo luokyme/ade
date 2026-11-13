@@ -38,7 +38,7 @@ use workspace::{
     item::{Item, ItemEvent, ItemHandle, SaveOptions},
     searchable::SearchableItemHandle,
 };
-use wu_actions::git as git_actions;
+use ade_actions::git as git_actions;
 
 actions!(
     git,
@@ -981,7 +981,7 @@ mod tests {
         });
     }
 
-    use wu_actions::git as git_actions;
+    use ade_actions::git as git_actions;
 
     use crate::branch_diff::BranchDiff;
     use crate::project_diff::{self, ProjectDiff};

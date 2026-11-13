@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use settings::{DefaultOpenBehavior, Settings};
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, prelude::*};
 use util::ResultExt;
-use wu_actions::{Extensions, OpenKeymap, OpenOnboarding, OpenSettings, command_palette};
+use ade_actions::{Extensions, OpenKeymap, OpenOnboarding, OpenSettings, command_palette};
 
 #[derive(PartialEq, Clone, Debug, Deserialize, Serialize, JsonSchema, Action)]
 #[action(namespace = welcome)]
@@ -28,9 +28,9 @@ pub struct OpenRecentProject {
 }
 
 actions!(
-    wu,
+    ade,
     [
-        /// Show the Wu welcome screen
+        /// Show the Ade welcome screen
         ShowWelcome
     ]
 );
@@ -317,7 +317,7 @@ impl WelcomePage {
                         })
                         .log_err();
                 } else {
-                    use wu_actions::OpenRecent;
+                    use ade_actions::OpenRecent;
                     window.dispatch_action(OpenRecent::default().boxed_clone(), cx);
                 }
             }
@@ -395,9 +395,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            t!("Welcome back to Wu")
+            t!("Welcome back to Ade")
         } else {
-            t!("Welcome to Wu")
+            t!("Welcome to Ade")
         };
 
         h_flex()
@@ -425,7 +425,7 @@ impl Render for WelcomePage {
                             .mb_4()
                             .gap_4()
                             .child(
-                                img("images/wu_icon.png")
+                                img("images/ade_icon.png")
                                     .size(rems_from_px(45_f32))
                                     .flex_none(),
                             )

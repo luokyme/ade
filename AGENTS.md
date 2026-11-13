@@ -26,7 +26,9 @@
 
 ### 设计决策索引
 
-暂无已登记的设计决策。新增时在此列出决策文件路径、编号前缀和涵盖范围。
+| 决策文件路径 | 编号前缀 | 涵盖范围 |
+| --- | --- | --- |
+| [decisions/title-bar.md](decisions/title-bar.md) | TITLEBAR | 标题栏信息架构：菜单栏常显、不显示工作树与分支、保留最近的项目入口 |
 
 # Rust coding guidelines
 
@@ -164,7 +166,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Build guidelines
 
 - Use `./script/clippy` instead of `cargo clippy`
-- 每次完成修改后、交付前，必须构建完整的 Wu 可执行程序：`cargo build -p wu --bin wu`。`cargo check`、单个 crate 构建和测试构建不能替代完整构建；用户本次明确指定其他构建方式或跳过构建时，遵循该指示。
+- 每次完成修改后、交付前，必须构建完整的 Ade 可执行程序：`cargo build -p ade --bin ade`。`cargo check`、单个 crate 构建和测试构建不能替代完整构建；用户本次明确指定其他构建方式或跳过构建时，遵循该指示。
 - 构建失败时处理与本次修改相关的问题；环境或既有问题阻塞时，明确说明原因，不宣称构建成功。交付时区分源码验证、完整构建与应用是否已重启。
 
 # Pull request hygiene

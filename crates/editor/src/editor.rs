@@ -247,8 +247,8 @@ use workspace::{
     notifications::{DetachAndPromptErr, NotificationId, NotifyResultExt, NotifyTaskExt},
     searchable::SearchEvent,
 };
-pub use wu_actions::editor::RevealInFileManager;
-use wu_actions::editor::{MoveDown, MoveUp};
+pub use ade_actions::editor::RevealInFileManager;
+use ade_actions::editor::{MoveDown, MoveUp};
 
 use crate::{
     bookmarks::BookmarksTabState,
@@ -1612,11 +1612,11 @@ fn remote_upgrade_required_message(error: &anyhow::Error) -> Option<String> {
     }
     let message = match error.error_tag("required") {
         Some(version) => t!(
-            "The remote instance of Wu does not support this yet. It must be upgraded to {version}",
+            "The remote instance of Ade does not support this yet. It must be upgraded to {version}",
             version = version
         ),
         None => t!(
-            "The remote instance of Wu does not support this yet. It must be upgraded to the latest version"
+            "The remote instance of Ade does not support this yet. It must be upgraded to the latest version"
         ),
     };
     Some(message.to_string())
@@ -8696,7 +8696,7 @@ impl Editor {
 
     fn copy_path(
         &mut self,
-        _: &wu_actions::workspace::CopyPath,
+        _: &ade_actions::workspace::CopyPath,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -8711,7 +8711,7 @@ impl Editor {
 
     fn copy_relative_path(
         &mut self,
-        _: &wu_actions::workspace::CopyRelativePath,
+        _: &ade_actions::workspace::CopyRelativePath,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {

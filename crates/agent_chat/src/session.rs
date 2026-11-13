@@ -3525,7 +3525,7 @@ impl AgentStore {
         session
     }
 
-    /// Chats the agent's own app saved for `cwd`, minus the ones Wu runs itself.
+    /// Chats the agent's own app saved for `cwd`, minus the ones Ade runs itself.
     pub fn external_sessions(
         &mut self,
         kind: AgentKind,

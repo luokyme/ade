@@ -1603,13 +1603,13 @@ impl Render for CommitViewToolbar {
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
                             t!("Buffer Search"),
-                            &wu_actions::buffer_search::Deploy::find(),
+                            &ade_actions::buffer_search::Deploy::find(),
                             cx,
                         )
                     })
                     .on_click(|_, window, cx| {
                         window.dispatch_action(
-                            Box::new(wu_actions::buffer_search::Deploy::find()),
+                            Box::new(ade_actions::buffer_search::Deploy::find()),
                             cx,
                         );
                     }),

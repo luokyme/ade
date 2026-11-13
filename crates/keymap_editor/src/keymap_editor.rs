@@ -46,7 +46,7 @@ use workspace::{
 };
 
 pub use ui_components::*;
-use wu_actions::{ChangeKeybinding, OpenKeymap};
+use ade_actions::{ChangeKeybinding, OpenKeymap};
 
 use crate::{
     action_completion_provider::ActionCompletionProvider,
@@ -2074,12 +2074,12 @@ impl Render for KeymapEditor {
                                     .child(
                                         Button::new("edit-in-json", t!("Edit in JSON"))
                                             .key_binding(
-                                                ui::KeyBinding::for_action_in(&wu_actions::OpenKeymapFile, &focus_handle, cx)
+                                                ui::KeyBinding::for_action_in(&ade_actions::OpenKeymapFile, &focus_handle, cx)
                                                     .map(|kb| kb.size(rems_from_px(10_f32))),
                                             )
                                             .on_click(|_, window, cx| {
                                                 window.dispatch_action(
-                                                    wu_actions::OpenKeymapFile.boxed_clone(),
+                                                    ade_actions::OpenKeymapFile.boxed_clone(),
                                                     cx,
                                                 );
                                             })
@@ -3602,21 +3602,21 @@ async fn load_keybind_context_language(
                 .project()
                 .read(cx)
                 .languages()
-                .language_for_name("Wu Keybind Context")
+                .language_for_name("Ade Keybind Context")
         })
-        .context("Failed to load Wu Keybind Context language")
+        .context("Failed to load Ade Keybind Context language")
         .log_err();
     let language = match language_task {
         Some(task) => task
             .await
-            .context("Failed to load Wu Keybind Context language")
+            .context("Failed to load Ade Keybind Context language")
             .log_err(),
         None => None,
     };
     language.unwrap_or_else(|| {
         Arc::new(Language::new(
             LanguageConfig {
-                name: "Wu Keybind Context".into(),
+                name: "Ade Keybind Context".into(),
                 ..Default::default()
             },
             Some(tree_sitter_rust::LANGUAGE.into()),
@@ -4162,8 +4162,8 @@ mod tests {
     #[gpui::test]
     async fn test_modifier_search_keeps_matching_shortcuts_after_release(cx: &mut TestAppContext) {
         let keymap_content = r#"[{"bindings": {
-            "ctrl-k": "wu::OpenKeymap",
-            "ctrl": "wu::OpenKeymap"
+            "ctrl-k": "ade::OpenKeymap",
+            "ctrl": "ade::OpenKeymap"
         }}]"#;
         let (_fs, keymap_editor, mut cx) = setup_keymap_editor(cx, keymap_content).await;
         let workspace = keymap_editor.read_with(&cx, |editor, _| editor.workspace.clone());
@@ -4192,7 +4192,7 @@ mod tests {
         cx.simulate_modifiers_change(gpui::Modifiers::control());
         cx.run_until_parked();
         keymap_editor.read_with(&cx, |editor, cx| {
-            assert_eq!(visible_rows_for_action(editor, "wu::OpenKeymap").len(), 1);
+            assert_eq!(visible_rows_for_action(editor, "ade::OpenKeymap").len(), 1);
             let query = editor.current_keystroke_query(cx);
             assert_eq!(query.len(), 1);
             assert!(query[0].key().is_empty());
@@ -4208,7 +4208,7 @@ mod tests {
             assert_eq!(query[0].key(), "control");
             assert!(!query[0].modifiers().modified());
             assert_eq!(
-                visible_rows_for_action(editor, "wu::OpenKeymap").len(),
+                visible_rows_for_action(editor, "ade::OpenKeymap").len(),
                 2,
                 "Control must find both the standalone binding and Ctrl-K; query: {:?}",
                 query
@@ -4221,7 +4221,7 @@ mod tests {
         });
         cx.run_until_parked();
         keymap_editor.read_with(&cx, |editor, _| {
-            let rows = visible_rows_for_action(editor, "wu::OpenKeymap");
+            let rows = visible_rows_for_action(editor, "ade::OpenKeymap");
             assert_eq!(rows.len(), 1);
             let binding = &editor.keybindings[editor.matches[rows[0]].candidate_id];
             let keystrokes = binding.keystrokes().expect("binding has keystrokes");
@@ -4235,7 +4235,7 @@ mod tests {
         });
         cx.run_until_parked();
         keymap_editor.read_with(&cx, |editor, _| {
-            assert_eq!(visible_rows_for_action(editor, "wu::OpenKeymap").len(), 2);
+            assert_eq!(visible_rows_for_action(editor, "ade::OpenKeymap").len(), 2);
         });
     }
 
@@ -4310,12 +4310,12 @@ mod tests {
         let keymap_content = r#"[
     {
         "bindings": {
-            "alt-cmd-shift-c": "wu::OpenKeymap"
+            "alt-cmd-shift-c": "ade::OpenKeymap"
         }
     },
     {
         "bindings": {
-            "alt-cmd-shift-c": "wu::OpenKeymap"
+            "alt-cmd-shift-c": "ade::OpenKeymap"
         }
     }
 ]"#;
@@ -4323,7 +4323,7 @@ mod tests {
         let cx = &mut cx;
 
         let rows = keymap_editor.read_with(cx, |editor, _| {
-            visible_rows_for_action(editor, "wu::OpenKeymap")
+            visible_rows_for_action(editor, "ade::OpenKeymap")
         });
         assert_eq!(
             rows.len(),
@@ -4349,7 +4349,7 @@ mod tests {
         cx.run_until_parked();
 
         let rows = keymap_editor.read_with(cx, |editor, _| {
-            visible_rows_for_action(editor, "wu::OpenKeymap")
+            visible_rows_for_action(editor, "ade::OpenKeymap")
         });
         assert_eq!(rows.len(), 1, "expected one row remaining after deletion");
     }
@@ -4577,7 +4577,7 @@ mod tests {
 
     #[test]
     fn binding_is_unbound_by_unbind_respects_precedence() {
-        let binding = gpui::KeyBinding::new("tab", wu_actions::OpenKeymap, None);
+        let binding = gpui::KeyBinding::new("tab", ade_actions::OpenKeymap, None);
         let unbind =
             gpui::KeyBinding::new("tab", gpui::Unbind(binding.action().name().into()), None);
 

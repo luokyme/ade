@@ -230,7 +230,7 @@ const GSPIN_MIDDLE_TINT: u32 = 0xEDB185;
 const GSPIN_BOTTOM_TINT: u32 = 0xF888A0;
 const GSPIN_DIM: f32 = 0.3;
 const GRADIENT_SPIN_MS: u64 = 900;
-const LOGO_PATH: &str = "icons/wu_mark.svg";
+const LOGO_PATH: &str = "icons/ade_mark.svg";
 const LOGO_ASPECT: f32 = 628. / 644.;
 const LOGO_BANDS: usize = 6;
 

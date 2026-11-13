@@ -5,11 +5,11 @@ import type { Messages } from '../i18n/en';
 import { PageContext, messagesFor, type Locale } from '../i18n/locale';
 
 const paths: { id: keyof Messages['docs']['gettingStarted']['paths']; path: string }[] = [
-  { id: 'commandLine', path: 'wu' },
-  { id: 'settingsUnix', path: '~/.config/wu' },
-  { id: 'settingsWindows', path: '%APPDATA%\\Wu' },
-  { id: 'appDataMac', path: '~/Library/Application Support/Wu' },
-  { id: 'projectSettings', path: '.wu/' }
+  { id: 'commandLine', path: 'ade' },
+  { id: 'settingsUnix', path: '~/.config/ade' },
+  { id: 'settingsWindows', path: '%APPDATA%\\Ade' },
+  { id: 'appDataMac', path: '~/Library/Application Support/Ade' },
+  { id: 'projectSettings', path: '.ade/' }
 ];
 
 function List({ items }: { items: string[] }) {

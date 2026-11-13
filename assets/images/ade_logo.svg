@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Ade – geometric A</title>
+
+  <path
+    fill="#181a21"
+    d="M292 64C160 64 64 160 64 292v440c0 132 96 228 228 228h440c132 0 228-96 228-228V292C960 160 864 64 732 64H292Z"
+  />
+
+  <!-- The mark's measured bounds are centered at (512, 512). -->
+  <g transform="translate(0 -30)">
+    <!-- Bold A: pointed apex, straight flanks, hollow counter. Built to survive at 16–32 px. -->
+    <path
+      fill="#F0EEF4"
+      fill-rule="evenodd"
+      d="M512 240 300 780h424L512 240Zm0 274-104 266h208L512 514Z"
+    />
+
+    <!-- Crossbar, cut on the slope of the flanks so it reads as one glyph. -->
+    <path fill="#7AA2F7" d="M375 590h274l36 90H339l36-90Z" />
+  </g>
+</svg>

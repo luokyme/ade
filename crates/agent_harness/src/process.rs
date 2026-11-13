@@ -5,7 +5,7 @@ pub use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-/// Wu has no console on Windows, so without this every agent process opens its own console window.
+/// Ade has no console on Windows, so without this every agent process opens its own console window.
 #[cfg(windows)]
 pub(crate) fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);

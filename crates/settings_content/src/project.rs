@@ -173,7 +173,7 @@ pub struct WorktreeSettingsContent {
     /// }
     /// ```
     ///
-    /// Use `"..."` to add patterns without repeating Wu’s defaults. In project
+    /// Use `"..."` to add patterns without repeating Ade’s defaults. In project
     /// settings, it extends the user or parent configuration value. Omit
     /// `"..."` to replace the inherited list.
     ///
@@ -219,7 +219,7 @@ pub struct LspSettings {
     /// Consult the documentation for the specific language server to see which settings are supported.
     pub settings: Option<serde_json::Value>,
     /// If the server supports sending tasks over LSP extensions,
-    /// this setting can be used to enable or disable them in Wu.
+    /// this setting can be used to enable or disable them in Ade.
     /// Default: true
     #[serde(default = "default_true")]
     pub enable_lsp_tasks: bool,
@@ -491,15 +491,15 @@ pub struct GitSettings {
     /// When the resolved directory is outside the project root, the
     /// project's directory name is automatically appended so that
     /// sibling repos don't collide. For example, with the default
-    /// `"../worktrees"` and a project at `~/code/wu`, worktrees are
-    /// created under `~/code/worktrees/wu/`.
+    /// `"../worktrees"` and a project at `~/code/ade`, worktrees are
+    /// created under `~/code/worktrees/ade/`.
     ///
     /// When the resolved directory is inside the project root, no
     /// extra component is added (it's already project-scoped).
     ///
     /// Examples:
     /// - `"../worktrees"` — `~/code/worktrees/<project>/` (default)
-    /// - `".git/wu-worktrees"` — `<project>/.git/wu-worktrees/`
+    /// - `".git/ade-worktrees"` — `<project>/.git/ade-worktrees/`
     /// - `"my-worktrees"` — `<project>/my-worktrees/`
     ///
     /// Trailing slashes are ignored.
@@ -740,7 +740,7 @@ pub struct DiagnosticsSettingsContent {
     /// Default: true
     pub include_warnings: Option<bool>,
 
-    /// Settings for using LSP pull diagnostics mechanism in Wu.
+    /// Settings for using LSP pull diagnostics mechanism in Ade.
     pub lsp_pull_diagnostics: Option<LspPullDiagnosticsSettingsContent>,
 
     /// Settings for showing inline diagnostics.
@@ -797,9 +797,9 @@ pub struct InlineDiagnosticsSettingsContent {
 pub struct NodeBinarySettings {
     /// The path to the Node binary.
     pub path: Option<String>,
-    /// The path to the npm binary Wu should use (defaults to `.path/../npm`).
+    /// The path to the npm binary Ade should use (defaults to `.path/../npm`).
     pub npm_path: Option<String>,
-    /// If enabled, Wu will download its own copy of Node.
+    /// If enabled, Ade will download its own copy of Node.
     pub ignore_system_version: Option<bool>,
 }
 

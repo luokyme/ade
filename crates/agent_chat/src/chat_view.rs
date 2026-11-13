@@ -4457,7 +4457,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn slash_menu_inserts_agent_commands_and_runs_wu_commands(cx: &mut TestAppContext) {
+    async fn slash_menu_inserts_agent_commands_and_runs_ade_commands(cx: &mut TestAppContext) {
         cx.update(|cx| {
             workspace::AppState::test(cx);
             editor::init(cx);

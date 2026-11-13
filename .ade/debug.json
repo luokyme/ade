@@ -1,0 +1,11 @@
+[
+  {
+    "label": "Debug Ade (CodeLLDB)",
+    "adapter": "CodeLLDB",
+    "build": {
+      "label": "Build Ade",
+      "command": "cargo",
+      "args": ["build", "-p", "ade", "--bin", "ade"],
+    },
+  },
+]

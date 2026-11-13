@@ -1,1 +1,1 @@
-See [ReadMe](https://github.com/dstrml/wu#download) for installation instructions.
+See [ReadMe](https://github.com/dstrml/ade#download) for installation instructions.

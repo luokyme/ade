@@ -158,7 +158,7 @@ pub use workspace_settings::{
     FocusFollowsMouse, RestoreOnStartupBehavior, StatusBarSettings, TabBarSettings,
     WorkspaceSettings, closing_last_window_quits_app, observe_accessible_mode,
 };
-use wu_actions::{Spawn, theme::ToggleMode};
+use ade_actions::{Spawn, theme::ToggleMode};
 
 use crate::{dock::PanelSizeState, item::ItemBufferKind, notifications::NotificationId};
 use crate::{
@@ -8868,11 +8868,11 @@ fn restore_native_window_state(
 }
 
 actions!(
-    wu,
+    ade,
     [
-        /// Opens the Wu log file.
+        /// Opens the Ade log file.
         OpenLog,
-        /// Reveals the Wu log file in the system file manager.
+        /// Reveals the Ade log file in the system file manager.
         RevealLogInFileManager
     ]
 );
@@ -9813,7 +9813,7 @@ pub async fn restart_and_restore_workspaces(
     Ok(true)
 }
 
-/// Names work that closing Wu would stop, so quitting and restarting ask first.
+/// Names work that closing Ade would stop, so quitting and restarting ask first.
 pub struct QuitWarning(pub fn(&App) -> Option<String>);
 
 impl Global for QuitWarning {}
@@ -9867,10 +9867,10 @@ async fn confirm_quit_warning(
             window.prompt(
                 PromptLevel::Warning,
                 &warning,
-                Some(&t!("Closing Wu now stops it.")),
+                Some(&t!("Closing Ade now stops it.")),
                 &[
                     PromptButton::cancel(t!("Cancel")),
-                    PromptButton::new(t!("Close Wu")),
+                    PromptButton::new(t!("Close Ade")),
                 ],
                 cx,
             )
@@ -11080,7 +11080,7 @@ mod tests {
             });
         });
         cx.executor().run_until_parked();
-        assert_eq!(cx.window_title().as_deref(), Some("Wu — root1, root2"));
+        assert_eq!(cx.window_title().as_deref(), Some("Ade — root1, root2"));
 
         let item = cx.new(|cx| {
             TestItem::new(cx).with_project_items(&[TestProjectItem::new_in_worktree(
@@ -11097,7 +11097,7 @@ mod tests {
         let expected_file_path = path!("/root1/src/one.txt");
         assert_eq!(
             cx.window_title().as_deref(),
-            Some(format!("Wu — root1, root2 — one — {expected_file_path}").as_str())
+            Some(format!("Ade — root1, root2 — one — {expected_file_path}").as_str())
         );
     }
 
@@ -17315,7 +17315,7 @@ mod tests {
     async fn test_toggle_theme_mode_persists_and_updates_active_theme(cx: &mut TestAppContext) {
         use settings::{ThemeName, ThemeSelection};
         use theme::SystemAppearance;
-        use wu_actions::theme::ToggleMode;
+        use ade_actions::theme::ToggleMode;
 
         init_test(cx);
 

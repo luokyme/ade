@@ -55,7 +55,7 @@ shift $((OPTIND-1))
 
 
 # Get release channel
-pushd crates/wu
+pushd crates/ade
 channel=$(<RELEASE_CHANNEL)
 export ZED_RELEASE_CHANNEL="${channel}"
 popd
@@ -93,19 +93,19 @@ script/generate-licenses
 
 rustup target add $target_triple
 
-echo "Compiling wu binaries"
+echo "Compiling ade binaries"
 if [[ "$target_dir" = "release" ]]; then
-    cargo --config .cargo/bundle-config.toml rustc ${build_flag} --package wu --bin wu --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
+    cargo --config .cargo/bundle-config.toml rustc ${build_flag} --package ade --bin ade --target $target_triple -- -C 'link-arg=-Wl,-unexported_symbol,__R*'
     cargo --config .cargo/bundle-config.toml build ${build_flag} --package cli --target $target_triple
 else
-    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} --package wu --package cli --target $target_triple
+    cargo --config .cargo/bundle-config.toml build ${build_flag} ${zed_features} --package ade --package cli --target $target_triple
 fi
 # Build remote_server in separate invocation to prevent feature unification from other crates
 # from influencing dynamic libraries required by it.
 cargo --config .cargo/bundle-config.toml build ${build_flag} ${remote_server_features} --package remote_server --target $target_triple
 
 echo "Creating application bundle"
-pushd crates/wu
+pushd crates/ade
 cp Cargo.toml Cargo.toml.backup
 sed \
     -i.backup \
@@ -120,7 +120,7 @@ echo "Bundled ${app_path}"
 
 # DocumentTypes.plist references CFBundleTypeIconFile "Document", so the bundle must contain Document.icns.
 # We use the app icon as a placeholder document icon for now.
-document_icon_source="crates/wu/resources/Document.icns"
+document_icon_source="crates/ade/resources/Document.icns"
 document_icon_target="${app_path}/Contents/Resources/Document.icns"
 if [[ -f "${document_icon_source}" ]]; then
     mkdir -p "$(dirname "${document_icon_target}")"
@@ -227,15 +227,15 @@ function sign_app_binaries() {
         # sequence of codesign commands modeled after this example: https://developer.apple.com/forums/thread/701514
         /usr/bin/codesign --deep --force --timestamp --options runtime --sign "$IDENTITY" "${app_path}/Contents/MacOS/cli" -v
         /usr/bin/codesign --deep --force --timestamp --options runtime --sign "$IDENTITY" "${app_path}/Contents/MacOS/git" -v
-        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/wu" -v
-        /usr/bin/codesign --force --timestamp --options runtime --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${app_path}" -v
+        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/ade/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/ade" -v
+        /usr/bin/codesign --force --timestamp --options runtime --entitlements crates/ade/resources/zed.entitlements --sign "$IDENTITY" "${app_path}" -v
     elif [[ $self_signed = true ]]; then
         echo "Code signing binaries with a self-signed certificate"
         # Apple's timestamp server and notarization only accept Apple-issued certificates.
         /usr/bin/codesign --force --timestamp=none --sign "$IDENTITY" "${app_path}/Contents/MacOS/cli" -v
         /usr/bin/codesign --force --timestamp=none --sign "$IDENTITY" "${app_path}/Contents/MacOS/git" -v
-        /usr/bin/codesign --force --timestamp=none --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/wu" -v
-        /usr/bin/codesign --force --timestamp=none --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${app_path}" -v
+        /usr/bin/codesign --force --timestamp=none --entitlements crates/ade/resources/zed.entitlements --sign "$IDENTITY" "${app_path}/Contents/MacOS/ade" -v
+        /usr/bin/codesign --force --timestamp=none --entitlements crates/ade/resources/zed.entitlements --sign "$IDENTITY" "${app_path}" -v
         /usr/bin/codesign --verify --deep --strict --verbose=2 "${app_path}"
         echo "Designated requirement:"
         /usr/bin/codesign --display --requirements - "${app_path}"
@@ -250,7 +250,7 @@ function sign_app_binaries() {
         # - create a PR and tag it with the `run-bundling` label, and download the .dmg file from there.
         # - create your own signing key and set APPLE_NOTARIZATION_TEAM to your own team ID
         # then comment out this line.
-        cat crates/wu/resources/zed.entitlements | sed '/com.apple.developer.associated-domains/,+1d' > "${app_path}/Contents/Resources/zed.entitlements"
+        cat crates/ade/resources/zed.entitlements | sed '/com.apple.developer.associated-domains/,+1d' > "${app_path}/Contents/Resources/zed.entitlements"
 
         codesign --force --deep --entitlements "${app_path}/Contents/Resources/zed.entitlements" --sign ${MACOS_SIGNING_KEY:- -} "${app_path}" -v
     fi
@@ -278,7 +278,7 @@ function sign_app_binaries() {
     else
         dmg_target_directory="target/${target_triple}/${target_dir}"
         dmg_source_directory="${dmg_target_directory}/dmg"
-        dmg_file_path="${dmg_target_directory}/Wu-${arch_suffix}.dmg"
+        dmg_file_path="${dmg_target_directory}/Ade-${arch_suffix}.dmg"
         xcode_bin_dir_path="$(xcode-select -p)/usr/bin"
 
         rm -rf ${dmg_source_directory}
@@ -290,7 +290,7 @@ function sign_app_binaries() {
         ln -s /Applications ${dmg_source_directory}
 
         echo "Creating final DMG at ${dmg_file_path} using ${dmg_source_directory}"
-        hdiutil create -volname Wu -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
+        hdiutil create -volname Ade -srcfolder "${dmg_source_directory}" -ov -format UDZO "${dmg_file_path}"
 
         # If someone runs this bundle script locally, a symlink will be placed in `dmg_source_directory`.
         # This symlink causes CPU issues with Zed if the Zed codebase is the project being worked on, so we simply remove it for now.
@@ -317,7 +317,7 @@ function sign_binary() {
 
     if [[ $can_code_sign = true ]]; then
         echo "Code signing executable $binary_path"
-        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/wu/resources/zed.entitlements --sign "$IDENTITY" "${binary_path}" -v
+        /usr/bin/codesign --deep --force --timestamp --options runtime --entitlements crates/ade/resources/zed.entitlements --sign "$IDENTITY" "${binary_path}" -v
     elif [[ $self_signed = true ]]; then
         echo "Code signing executable $binary_path with a self-signed certificate"
         /usr/bin/codesign --force --timestamp=none --sign "$IDENTITY" "${binary_path}" -v
@@ -325,28 +325,28 @@ function sign_binary() {
 }
 
 
-cp target/${target_triple}/${target_dir}/wu "${app_path}/Contents/MacOS/wu"
+cp target/${target_triple}/${target_dir}/ade "${app_path}/Contents/MacOS/ade"
 cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 
 if [[ "$target_dir" = "release" && -n "${CI:-}${BUNDLE_DSYM:-}" ]]; then
-    dsym_path="target/${target_triple}/${target_dir}/Wu.dSYM"
+    dsym_path="target/${target_triple}/${target_dir}/Ade.dSYM"
     rm -rf "$dsym_path" "${dsym_path}.zip"
     # Use rustc's dSYM when split-debuginfo produced one, otherwise build it.
-    if [[ -d "target/${target_triple}/${target_dir}/wu.dSYM" ]]; then
-        cp -R "target/${target_triple}/${target_dir}/wu.dSYM" "$dsym_path"
+    if [[ -d "target/${target_triple}/${target_dir}/ade.dSYM" ]]; then
+        cp -R "target/${target_triple}/${target_dir}/ade.dSYM" "$dsym_path"
     else
-        dsymutil "target/${target_triple}/${target_dir}/wu" -o "$dsym_path"
+        dsymutil "target/${target_triple}/${target_dir}/ade" -o "$dsym_path"
     fi
     ditto -c -k --keepParent "$dsym_path" "${dsym_path}.zip"
     echo "Created debug symbols at ${dsym_path}.zip"
 fi
 
 if [[ "$target_dir" = "release" && "$local_install" != true ]]; then
-    strip -x "${app_path}/Contents/MacOS/wu" "${app_path}/Contents/MacOS/cli"
+    strip -x "${app_path}/Contents/MacOS/ade" "${app_path}/Contents/MacOS/cli"
     strip -x "target/${target_triple}/${target_dir}/remote_server"
 fi
 
 sign_app_binaries
 
 sign_binary "target/$target_triple/release/remote_server"
-gzip -f --stdout --best target/$target_triple/release/remote_server > target/wu-remote-server-macos-$arch_suffix.gz
+gzip -f --stdout --best target/$target_triple/release/remote_server > target/ade-remote-server-macos-$arch_suffix.gz

@@ -54,25 +54,25 @@ actions!(
 
 pub fn checkout_branch(
     workspace: &mut Workspace,
-    _: &wu_actions::git::CheckoutBranch,
+    _: &ade_actions::git::CheckoutBranch,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    open(workspace, &wu_actions::git::Branch, window, cx);
+    open(workspace, &ade_actions::git::Branch, window, cx);
 }
 
 pub fn switch(
     workspace: &mut Workspace,
-    _: &wu_actions::git::Switch,
+    _: &ade_actions::git::Switch,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    open(workspace, &wu_actions::git::Branch, window, cx);
+    open(workspace, &ade_actions::git::Branch, window, cx);
 }
 
 pub fn open(
     workspace: &mut Workspace,
-    _: &wu_actions::git::Branch,
+    _: &ade_actions::git::Branch,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {

@@ -1810,10 +1810,10 @@ impl OutlinePanel {
                     menu.action(t!("Fold Directory"), Box::new(FoldDirectory))
                 })
                 .separator()
-                .action(t!("Copy Path"), Box::new(wu_actions::workspace::CopyPath))
+                .action(t!("Copy Path"), Box::new(ade_actions::workspace::CopyPath))
                 .action(
                     t!("Copy Relative Path"),
-                    Box::new(wu_actions::workspace::CopyRelativePath),
+                    Box::new(ade_actions::workspace::CopyRelativePath),
                 )
         });
         window.focus(&context_menu.focus_handle(cx), cx);
@@ -2287,7 +2287,7 @@ impl OutlinePanel {
 
     fn copy_path(
         &mut self,
-        _: &wu_actions::workspace::CopyPath,
+        _: &ade_actions::workspace::CopyPath,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2302,7 +2302,7 @@ impl OutlinePanel {
 
     fn copy_relative_path(
         &mut self,
-        _: &wu_actions::workspace::CopyRelativePath,
+        _: &ade_actions::workspace::CopyRelativePath,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {

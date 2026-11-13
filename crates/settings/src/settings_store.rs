@@ -44,7 +44,7 @@ use crate::{
 
 use settings_json::{infer_json_indent_size, update_value_in_json_text};
 
-pub const LSP_SETTINGS_SCHEMA_URL_PREFIX: &str = "wu://schemas/settings/lsp/";
+pub const LSP_SETTINGS_SCHEMA_URL_PREFIX: &str = "ade://schemas/settings/lsp/";
 
 pub trait SettingsKey: 'static + Send + Sync {
     /// The name of a key within the JSON file from which this setting should
@@ -3162,7 +3162,7 @@ mod tests {
 
         assert_eq!(
             init_options_ref,
-            "wu://schemas/settings/lsp/rust-analyzer/initialization_options"
+            "ade://schemas/settings/lsp/rust-analyzer/initialization_options"
         );
 
         let settings_ref = properties
@@ -3175,7 +3175,7 @@ mod tests {
 
         assert_eq!(
             settings_ref,
-            "wu://schemas/settings/lsp/rust-analyzer/settings"
+            "ade://schemas/settings/lsp/rust-analyzer/settings"
         );
     }
 
@@ -3217,7 +3217,7 @@ mod tests {
 
         assert_eq!(
             init_options_ref,
-            "wu://schemas/settings/lsp/rust-analyzer/initialization_options"
+            "ade://schemas/settings/lsp/rust-analyzer/initialization_options"
         );
 
         let settings_ref = properties
@@ -3230,7 +3230,7 @@ mod tests {
 
         assert_eq!(
             settings_ref,
-            "wu://schemas/settings/lsp/rust-analyzer/settings"
+            "ade://schemas/settings/lsp/rust-analyzer/settings"
         );
     }
 

@@ -163,8 +163,8 @@ impl CodexHarness {
                     "initialize",
                     json!({
                         "clientInfo": {
-                            "name": "wu",
-                            "title": "Wu",
+                            "name": "ade",
+                            "title": "Ade",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
                         "capabilities": { "experimentalApi": true },
@@ -935,8 +935,8 @@ async fn run_session(session: Session) {
                 "initialize",
                 json!({
                     "clientInfo": {
-                        "name": "wu",
-                        "title": "Wu",
+                        "name": "ade",
+                        "title": "Ade",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                     "capabilities": { "experimentalApi": true },

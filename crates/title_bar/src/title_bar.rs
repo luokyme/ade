@@ -38,7 +38,7 @@ use workspace::{
     AgentActivity, MultiWorkspace, ProjectGroupKey, ToggleWorktreeSecurity, Workspace,
 };
 
-use wu_actions::OpenRemote;
+use ade_actions::OpenRemote;
 
 pub use onboarding_banner::restore_banner;
 
@@ -694,12 +694,12 @@ impl TitleBar {
                     .label_size(LabelSize::Small)
                     .color(Color::Muted)
                     .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(wu_actions::OpenRecent::default()), cx)
+                        window.dispatch_action(Box::new(ade_actions::OpenRecent::default()), cx)
                     })
                     .tooltip(|_window, cx| {
                         Tooltip::for_action(
                             t!("More Open Projects"),
-                            &wu_actions::OpenRecent::default(),
+                            &ade_actions::OpenRecent::default(),
                             cx,
                         )
                     }),
@@ -763,7 +763,7 @@ impl TitleBar {
                 move |_window, cx| {
                     Tooltip::for_action(
                         t!("Recent Projects"),
-                        &wu_actions::OpenRecent::default(),
+                        &ade_actions::OpenRecent::default(),
                         cx,
                     )
                 },
@@ -781,7 +781,7 @@ mod tests {
     #[test]
     fn project_tab_names_use_folder_names() {
         let key = |paths: &[&str]| ProjectGroupKey::new(None, PathList::new(paths));
-        assert_eq!(project_group_name(&key(&["/code/wu"])), "wu");
+        assert_eq!(project_group_name(&key(&["/code/ade"])), "ade");
         assert_eq!(
             project_group_name(&key(&["/code/api", "/code/web"])),
             "api, web"

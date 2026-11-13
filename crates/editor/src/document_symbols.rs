@@ -403,7 +403,7 @@ mod tests {
     use theme::SyntaxTheme;
     use util::path;
     use workspace::item::{Item, ItemEvent};
-    use wu_actions::editor::MoveDown;
+    use ade_actions::editor::MoveDown;
 
     use super::highlights_from_buffer;
     use crate::{
