@@ -1,22 +1,52 @@
 #!/usr/bin/env bash
 
-set -euxo pipefail
+set -euo pipefail
 
 if [[ $# -gt 0 ]]; then
   echo "
   Usage: ${0##*/}
-  Builds and installs ade onto your system into ~/.local, making it available as ~/.local/bin/ade.
+  Builds the editor and CLI and installs them into ~/.local, making Ade available as ~/.local/bin/ade.
+  Use ./script/bundle-linux to build release archives and the remote server.
 
   Before running this you should ensure you have all the build dependencies installed with `./script/linux`.
   "
   exit 1
 fi
-export ADE_CHANNEL=$(<crates/ade/RELEASE_CHANNEL)
+export ADE_CHANNEL
+ADE_CHANNEL=$(<crates/ade/RELEASE_CHANNEL)
 export ZED_UPDATE_EXPLANATION="You need to fetch and rebuild ade in $(pwd)"
-script/bundle-linux
+export RELEASE_VERSION
+RELEASE_VERSION=$(script/get-crate-version ade)
+export CC=${CC:-clang}
 
-arch="$(uname -m)"
-commit=$(git rev-parse HEAD | cut -c 1-7)
-archive="ade-linux-${arch}.tar.gz"
-export ADE_BUNDLE_PATH="${CARGO_TARGET_DIR:-target}/release/${archive}"
+echo "Building the editor and CLI for local installation..."
+cargo rustc --release --package ade --bin ade -- -C linker="$CC" -C link-arg=-fuse-ld=lld
+cargo build --release --package cli --bin cli
+
+binary_dir="${CARGO_TARGET_DIR:-target}/release"
+if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
+    binary_dir="${CARGO_TARGET_DIR:-target}/${CARGO_BUILD_TARGET}/release"
+fi
+mkdir -p "$HOME/.local"
+temp_dir=$(mktemp -d "$HOME/.local/ade-install.XXXXXX")
+trap 'rm -rf "$temp_dir"' EXIT
+app_dir="$temp_dir/ade.app"
+mkdir -p "$app_dir/bin" "$app_dir/libexec" "$app_dir/share/applications"
+cp "$binary_dir/ade" "$app_dir/libexec/ade-editor"
+cp "$binary_dir/cli" "$app_dir/bin/ade"
+
+suffix=""
+if [[ "$ADE_CHANNEL" != stable ]]; then
+    suffix="-$ADE_CHANNEL"
+fi
+mkdir -p "$app_dir/share/icons/hicolor/512x512/apps" "$app_dir/share/icons/hicolor/1024x1024/apps"
+cp "crates/ade/resources/app-icon$suffix.png" "$app_dir/share/icons/hicolor/512x512/apps/ade.png"
+cp "crates/ade/resources/app-icon$suffix@2x.png" "$app_dir/share/icons/hicolor/1024x1024/apps/ade.png"
+
+export DO_STARTUP_NOTIFY=true APP_CLI=ade APP_ICON=ade APP_ARGS=%U APP_NAME=Ade
+envsubst < crates/ade/resources/zed.desktop.in > "$app_dir/share/applications/me.farshed.Ade.desktop"
+chmod +x "$app_dir/share/applications/me.farshed.Ade.desktop"
+
+echo "Installing the editor, CLI, icons and desktop entry..."
+export ADE_BUNDLE_DIR="$app_dir"
 script/install.sh

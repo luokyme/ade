@@ -2,7 +2,8 @@
 set -eu
 
 # Downloads a Ade release from GitHub and unpacks it into ~/.local/.
-# Optional: ADE_VERSION=1.2.3 picks a release, ADE_BUNDLE_PATH installs a local tarball.
+# Optional: ADE_VERSION=1.2.3 picks a release, ADE_BUNDLE_PATH installs a local tarball,
+# ADE_BUNDLE_DIR installs a staged Linux application directory.
 # The ZED_ names of these variables still work for older instructions.
 
 main() {
@@ -12,6 +13,7 @@ main() {
     repo="luokyme/ade"
     version="${ADE_VERSION:-${ZED_VERSION:-latest}}"
     bundle_path="${ADE_BUNDLE_PATH:-${ZED_BUNDLE_PATH:-}}"
+    bundle_dir="${ADE_BUNDLE_DIR:-}"
     if [ "$version" = "latest" ]; then
         download_base="https://github.com/$repo/releases/latest/download"
     else
@@ -46,7 +48,9 @@ main() {
             ;;
     esac
 
-    if command -v curl >/dev/null 2>&1; then
+    if [ "$platform" = linux ] && { [ -n "$bundle_dir" ] || [ -n "$bundle_path" ]; }; then
+        :
+    elif command -v curl >/dev/null 2>&1; then
         curl () {
             command curl -fL "$@"
         }
@@ -86,18 +90,20 @@ main() {
 }
 
 linux() {
-    if [ -n "$bundle_path" ]; then
-        cp "$bundle_path" "$temp/ade-linux-$arch.tar.gz"
-    else
-        echo "Downloading Ade version: $version"
-        curl "$download_base/ade-linux-$arch.tar.gz" > "$temp/ade-linux-$arch.tar.gz"
-    fi
-
+    trap 'rm -rf "$temp"' EXIT
     appid="me.farshed.Ade"
-    tar -xzf "$temp/ade-linux-$arch.tar.gz" -C "$temp"
-    bundle_dir="$temp/ade.app"
-    if [ ! -d "$bundle_dir" ] && [ -d "$temp/ade-$channel.app" ]; then
-        bundle_dir="$temp/ade-$channel.app"
+    if [ -z "$bundle_dir" ]; then
+        if [ -n "$bundle_path" ]; then
+            cp "$bundle_path" "$temp/ade-linux-$arch.tar.gz"
+        else
+            echo "Downloading Ade version: $version"
+            curl "$download_base/ade-linux-$arch.tar.gz" > "$temp/ade-linux-$arch.tar.gz"
+        fi
+        tar -xzf "$temp/ade-linux-$arch.tar.gz" -C "$temp"
+        bundle_dir="$temp/ade.app"
+        if [ ! -d "$bundle_dir" ] && [ -d "$temp/ade-$channel.app" ]; then
+            bundle_dir="$temp/ade-$channel.app"
+        fi
     fi
     if [ ! -x "$bundle_dir/libexec/ade-editor" ] || [ ! -x "$bundle_dir/bin/ade" ]; then
         echo "Invalid Ade bundle: editor or CLI is missing"

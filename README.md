@@ -54,6 +54,12 @@ See [docs](https://luokyme.github.io/ade).
 
 Ade builds the same way Zed does. See the [Zed development docs](https://zed.dev/docs/development).
 
+On Linux, run `./script/linux` once to install build dependencies, then run
+`./script/install-linux` to build and install the editor and CLI into `~/.local`.
+This updates the desktop entry without creating release archives or building the
+remote server. Run `./script/bundle-linux` separately to create the Linux release
+archive and musl remote server archive.
+
 ## Licensing
 
 Ade is licensed under GPL-3.0-or-later with Apache-2.0 components where marked. See [LICENSE-GPL](./LICENSE-GPL) and [LICENSE-APACHE](./LICENSE-APACHE).
