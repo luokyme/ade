@@ -1,10 +1,10 @@
 {
   "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
-  "name": "Ade",
-  "author": "Ade",
+  "name": "Wu",
+  "author": "Wu",
   "themes": [
     {
-      "name": "Ade Dark",
+      "name": "Wu Dark",
       "appearance": "dark",
       "style": {
         "background.appearance": "opaque",
@@ -423,7 +423,7 @@
       }
     },
     {
-      "name": "Ade Dark Translucent",
+      "name": "Wu Dark Translucent",
       "appearance": "dark",
       "style": {
         "background.appearance": "blurred",
@@ -842,7 +842,7 @@
       }
     },
     {
-      "name": "Ade Light",
+      "name": "Wu Light",
       "appearance": "light",
       "style": {
         "border": "#c9c9caff",

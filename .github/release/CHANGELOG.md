@@ -99,7 +99,7 @@ All notable user-facing changes to Ade are listed here, newest first.
 ## 1.1.11 - 2026-10-26
 
 - You can now save important messages in agent chats for later.
-- Ade Dark has a new solid look with softer colors. Previous Ade Dark is now `Ade Dark Translucent`.
+- Wu Dark has a new solid look with softer colors. Previous Wu Dark is now `Wu Dark Translucent`.
 - Typing `@` in an agent chat now shows more relevant file suggestions.
 - Images in agent chats can now be downloaded.
 - Fixed Perso-Arabic script and other text with raised or lowered letters looking scrambled on macOS.
@@ -161,7 +161,7 @@ All notable user-facing changes to Ade are listed here, newest first.
 ## 1.1.4 - 2026-10-08
 
 - Made the time on agent chats in the sidebar easier to read.
-- Fixed error and warning popups in the editor being see-through and hard to read in Ade Dark.
+- Fixed error and warning popups in the editor being see-through and hard to read in Wu Dark.
 - Cleaned up the context menu options in the agent chat sidebar.
 - Forked chats now continue from a real copy of the agent's own session.
 - User messages in agent chats can now be selected and copied in part.
@@ -172,7 +172,7 @@ All notable user-facing changes to Ade are listed here, newest first.
 - Support for Intel Macs.
 - Fixed subagent tabs not showing the working indicator while a background subagent was still running.
 - Hovering the running command or agent indicator under the chat box now shows what's running in a tooltip.
-- The title bar and status bar in Ade Dark now have the same tint as the panels.
+- The title bar and status bar in Wu Dark now have the same tint as the panels.
 - Fixed the working indicator in agent chats not coming back when the agent picks up again after a background process finishes.
 - Agent Chat now supports OpenCode.
 - The line number gutter is more compact.
@@ -181,7 +181,7 @@ All notable user-facing changes to Ade are listed here, newest first.
 - Activity bar icons now follow the UI font size by default.
 - Fixed the side panel jumping wider when you start resizing it.
 - Users can now choose permission modes from the model picker.
-- Improve Ade Light's interface colors.
+- Improve Wu Light's interface colors.
 
 ## 1.1.2 - 2026-10-05
 
@@ -196,7 +196,7 @@ All notable user-facing changes to Ade are listed here, newest first.
 - Agent notifications now use the system's native notifications.
 - In the model picker, effort is set with a slider and context window show every choice as a button.
 - Fixed the dark bar that showed at the top of the file tree when scrolling in Ade themes.
-- The sidebar, activity bar and tab bar in Ade Light now have solid colors.
+- The sidebar, activity bar and tab bar in Wu Light now have solid colors.
 - Fixed the context window and plan usage popups in agent chats staying open when clicking elsewhere.
 - Removed the options menu from the top of the agent chat sidebar.
 - Agent chats in the sidebar no longer repeat the project name on every row, so the list is shorter and easier to scan.
@@ -208,12 +208,12 @@ All notable user-facing changes to Ade are listed here, newest first.
 - The chat shows "Compacting conversation…" while the agent compacts and the context ring updates right after.
 - Long agent chats scroll smoothly and typing in the chat box feels instant, since only the messages on screen are drawn.
 - Fixed a black bar at the top of the file tree when scrolling with the Ade themes.
-- Fixed text in the chat box being hard to read after switching between Ade Dark and Ade Light.
+- Fixed text in the chat box being hard to read after switching between Wu Dark and Wu Light.
 
 ## 1.1.0 - 2026-10-04
 
 - The activity bar's icon size is now configurable in settings and via the `activity_bar.icon_size` property.
-- New Ade Light and Ade Dark themes.
+- New Wu Light and Wu Dark themes.
 - Symbols is the new default icon theme.
 - Geist is the new interface font, and JetBrains Mono is the new code font.
 - Redesigned tabs.

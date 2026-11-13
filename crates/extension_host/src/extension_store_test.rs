@@ -554,7 +554,7 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                 "Monokai Light",
                 "Monokai Pro Dark",
                 "Monokai Pro Light",
-                "Ade Dark",
+                "Wu Dark",
             ]
         );
     });
@@ -648,7 +648,7 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                 "Monokai Light",
                 "Monokai Pro Dark",
                 "Monokai Pro Light",
-                "Ade Dark",
+                "Wu Dark",
             ]
         );
     });
@@ -712,7 +712,7 @@ async fn test_extension_store(cx: &mut TestAppContext) {
                 "Monokai Light",
                 "Monokai Pro Dark",
                 "Monokai Pro Light",
-                "Ade Dark",
+                "Wu Dark",
             ]
         );
 
@@ -779,7 +779,7 @@ async fn test_uninstalling_an_extension_restores_the_bundled_theme_it_replaced(
                         "name": "Catppuccin",
                         "version": "1.0.0",
                         "themes": {
-                            "Ade Dark": "themes/catppuccin.json"
+                            "Wu Dark": "themes/catppuccin.json"
                         }
                     }"#,
                     "themes": {
@@ -788,7 +788,7 @@ async fn test_uninstalling_an_extension_restores_the_bundled_theme_it_replaced(
                             "author": "Someone",
                             "themes": [
                                 {
-                                    "name": "Ade Dark",
+                                    "name": "Wu Dark",
                                     "appearance": "dark",
                                     "style": {}
                                 }
