@@ -9,4 +9,5 @@
 - 理由：用户要求把项目从 Wu 改名为 Ade，并重新挑选 logo；旧名 "Wu" 取自人名，与新定位不符。
 - 依据：用户 2026-11-13 明确要求"本项目改名为ade, 并挑选个合适的logo"。
 - 关联：`crates/ade`、`crates/ade_actions`、`crates/ade_env_vars`、`assets/images/ade_logo.svg`、`assets/icons/ade_mark.svg`、`crates/ade/resources/app-icon*.png`。
-- 待办：仓库改名后，GitHub 仓库 `dstrml/wu` 需同步更名为 `dstrml/ade`，文档域名 `wu.dstrml.org` 需同步调整，否则 `script/install.sh` 的下载地址会失效。
+- 状态（2026-11-13 核对）：域名已切换为 `ade.dstrml.org`，代码、README、website（`website/src/consts.ts`）中的 `REPO_URL` 均已指向 `dstrml/ade`；GitHub 上仓库仍名为 `dstrml/wu`（属组织 `dstrml`），需组织管理员执行改名（`PATCH https://api.github.com/repos/dstrml/wu -d '{"name":"ade"}'` 或组织设置页改名），改名后本地 `origin` 更新为 `git@github.com:dstrml/ade.git`。在改名完成前 `script/install.sh` 的 release 下载地址不可用。
+- 补充：个人 fork 仓库为 `git@github.com:luokyme/ade.git`，已推送完整历史。

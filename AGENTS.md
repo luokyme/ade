@@ -16,6 +16,7 @@
 | 记忆文件路径 | 涵盖范围 |
 | --- | --- |
 | [memory/git-ui.md](memory/git-ui.md) | Git 面板的用户偏好与 Repositories 范围确认 |
+| [memory/local-deploy.md](memory/local-deploy.md) | 本机部署 Ade 的可行路径、资源加载限制与远端仓库现状 |
 
 ## 设计决策
 
