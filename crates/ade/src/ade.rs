@@ -14,7 +14,6 @@ pub(crate) mod windows_only_instance;
 
 use anyhow::Context as _;
 pub use app_menus::*;
-use assets::Assets;
 
 use breadcrumbs::Breadcrumbs;
 use collections::VecDeque;
@@ -85,7 +84,7 @@ use theme_settings::{ThemeSettings, load_user_theme};
 use ui::{Navigable, NavigableEntry, PopoverMenuHandle, TintColor, prelude::*};
 use util::markdown::MarkdownString;
 use util::rel_path::RelPath;
-use util::{ResultExt, asset_str, maybe};
+use util::{ResultExt, maybe};
 use uuid::Uuid;
 use workspace::notifications::{NotificationId, dismiss_app_notification, show_app_notification};
 
@@ -196,19 +195,7 @@ pub fn init(cx: &mut App) {
         });
     }
 
-    cx.on_action(|_: &ade_actions::OpenLicenses, cx| {
-        with_active_or_new_workspace(cx, |workspace, window, cx| {
-            open_bundled_file(
-                workspace,
-                asset_str::<Assets>("licenses.md"),
-                n!("Open Source License Attribution"),
-                "Markdown",
-                window,
-                cx,
-            );
-        });
-    })
-    .on_action(|&ade_actions::OpenKeymapFile, cx| {
+    cx.on_action(|&ade_actions::OpenKeymapFile, cx| {
         with_active_or_new_workspace(cx, |_, window, cx| {
             open_settings_file(
                 paths::keymap_file(),

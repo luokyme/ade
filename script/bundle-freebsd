@@ -44,8 +44,6 @@ remote_server_triple=${REMOTE_SERVER_TARGET:-"${target_triple}"}
 # if command -v rustup >/dev/null 2>&1; then
 #     rustup_installed=true
 # fi
-# Generate the licenses first, so they can be baked into the binaries
-# script/generate-licenses
 # if "$rustup_installed"; then
 #     rustup target add "$remote_server_triple"
 # fi
@@ -139,9 +137,6 @@ fi
 # mkdir -p "${zed_dir}/share/applications"
 # envsubst <"crates/ade/resources/zed.desktop.in" >"${zed_dir}/share/applications/zed$suffix.desktop"
 # chmod +x "${zed_dir}/share/applications/zed$suffix.desktop"
-
-# Copy generated licenses so they'll end up in archive too
-# cp "assets/licenses.md" "${zed_dir}/licenses.md"
 
 # Create archive out of everything that's in the temp directory
 arch=$(uname -m)

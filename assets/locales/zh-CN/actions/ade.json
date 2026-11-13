@@ -87,10 +87,6 @@
     "description": "打开用户键位映射文件。",
     "name": "打开键位映射文件"
   },
-  "ade::OpenLicenses": {
-    "description": "查看开源许可证。",
-    "name": "查看开源许可证"
-  },
   "ade::OpenLog": {
     "description": "打开 Ade 的日志文件。",
     "name": "打开日志"

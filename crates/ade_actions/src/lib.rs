@@ -67,8 +67,6 @@ actions!(
         About,
         /// Opens the documentation website.
         OpenDocs,
-        /// Views open source licenses.
-        OpenLicenses,
         /// Opens the performance profiler.
         OpenPerformanceProfiler,
         /// Opens the onboarding view.

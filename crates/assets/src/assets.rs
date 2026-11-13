@@ -18,7 +18,6 @@ util::fs_embed! {
         "images/**/*",
         "sounds/**/*",
         "themes/**/*",
-        "*.md",
     ],
     exclude = ["themes/src/*", "*.DS_Store"],
 }

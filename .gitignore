@@ -24,7 +24,6 @@
 .vscode
 .wrangler
 .perf-runs
-/assets/*licenses.*
 /crates/collab/seed.json
 /crates/theme/schemas/theme.json
 /crates/ade/resources/flatpak/flatpak-cargo-sources.json

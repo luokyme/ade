@@ -85,10 +85,6 @@ function PrepareForBundle {
     rustup target add $target
 }
 
-function GenerateLicenses {
-    . $PSScriptRoot/generate-licenses.ps1
-}
-
 function BuildAdeAndItsFriends {
     Write-Output "Building Ade and its friends, for channel: $channel"
     cargo --config .cargo/bundle-config.toml build --release --package ade --package cli --package auto_update_helper --target $target
@@ -260,7 +256,6 @@ function BuildInstaller {
 
 Push-Location $workspace
 PrepareForBundle
-GenerateLicenses
 BuildAdeAndItsFriends
 BuildRemoteServer
 MakeAppx

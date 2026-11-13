@@ -43,7 +43,6 @@ parts:
     prime:
       # Omit unneeded files from the tarball
       - -lib
-      - -licenses.md
       - -share
 
       # Omit unneeded files from stage-packages

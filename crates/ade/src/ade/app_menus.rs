@@ -338,7 +338,6 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                     t!("View Release Notes Locally"),
                     auto_update_ui::ViewReleaseNotesLocally,
                 ),
-                MenuItem::action(t!("View Dependency Licenses"), ade_actions::OpenLicenses),
                 MenuItem::action(t!("Show Welcome"), onboarding::ShowWelcome),
                 MenuItem::separator(),
                 MenuItem::action(
