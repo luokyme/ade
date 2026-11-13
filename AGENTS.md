@@ -168,8 +168,8 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Build guidelines
 
 - Use `./script/clippy` instead of `cargo clippy`
-- 每次完成修改后、交付前，必须构建完整的 Ade 可执行程序：`cargo build -p ade --bin ade`。`cargo check`、单个 crate 构建和测试构建不能替代完整构建；用户本次明确指定其他构建方式或跳过构建时，遵循该指示。
-- 构建失败时处理与本次修改相关的问题；环境或既有问题阻塞时，明确说明原因，不宣称构建成功。交付时区分源码验证、完整构建与应用是否已重启。
+- 每次完成修改后、交付前，必须在项目根目录执行 `./script/install-linux`，完成完整编译、打包、安装以及桌面入口更新。仅执行 `cargo build -p ade --bin ade`、`cargo check` 或测试不能替代安装交付；用户本次明确要求其他方式或跳过时，遵循该指示。
+- 构建失败时处理与本次修改相关的问题；环境或既有问题阻塞时，明确说明原因，不宣称构建成功。交付时区分源码验证、完整构建、安装和桌面入口更新、应用是否已重启；安装失败必须说明阻塞，不能只构建后宣称已更新。
 
 # Pull request hygiene
 

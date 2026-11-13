@@ -97,6 +97,8 @@ if [[ -n $dnf ]] || [[ -n $yum ]]; then
     musl-gcc
     gcc
     clang
+    lld
+    llvm
     cmake
     alsa-lib-devel
     fontconfig-devel
