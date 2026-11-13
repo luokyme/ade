@@ -6589,7 +6589,7 @@ impl GitPanel {
         let group_name: SharedString = format!("repository-row-{id}").into();
         let keyboard_focus = self.repositories_focus_handle.contains_focused(window, cx);
         let active = self.active_repository.as_ref() == Some(&repository);
-        let name = repo.display_name().to_owned();
+        let name = repo.display_name();
         let path = repo.work_directory_abs_path.to_string_lossy().into_owned();
         let summary = repo.status_summary();
         let branch = repo
@@ -6686,7 +6686,7 @@ impl GitPanel {
             })
             .when(summary.count > 0, |this| {
                 this.child(Self::render_count_badge(
-                    summary.count as usize,
+                    summary.count,
                     if summary.conflict > 0 {
                         Color::Conflict
                     } else {
