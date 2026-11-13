@@ -101,7 +101,7 @@ use ade_actions::{
     OpenAdeUrl, Quit,
 };
 
-const DOCS_URL: &str = "https://ade.dstrml.org/docs";
+const DOCS_URL: &str = "https://luokyme.github.io/ade/docs";
 
 actions!(
     ade,

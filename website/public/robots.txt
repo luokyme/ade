@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://ade.dstrml.org/sitemap.xml
+Sitemap: https://luokyme.github.io/ade/sitemap.xml

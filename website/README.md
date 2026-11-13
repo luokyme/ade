@@ -1,6 +1,6 @@
 # Ade website
 
-The site at [ade.dstrml.org](https://ade.dstrml.org). React and Tailwind, prerendered to static HTML with Bun.
+The site at [luokyme.github.io/ade](https://luokyme.github.io/ade). React and Tailwind, prerendered to static HTML with Bun.
 
 ```sh
 bun install

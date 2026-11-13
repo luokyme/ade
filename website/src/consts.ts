@@ -1,10 +1,10 @@
-export const SITE_URL = 'https://ade.dstrml.org';
+export const SITE_URL = 'https://luokyme.github.io/ade';
 export const INSTALL_COMMAND = `curl -fsSL ${SITE_URL}/install.sh | sh`;
 export const SITE_TITLE = 'Ade';
 export const SITE_DESCRIPTION =
   'Ade is the fast, native code editor, written in Rust. Batteries included, with coding agents built in. No account, no telemetry.';
 
-export const REPO_URL = 'https://github.com/dstrml/ade';
+export const REPO_URL = 'https://github.com/luokyme/ade';
 export const RELEASES_URL = `${REPO_URL}/releases`;
 export const ISSUES_URL = `${REPO_URL}/issues`;
 export const INSTALL_GUIDE_URL = `${REPO_URL}/blob/main/docs/INSTALL.md`;

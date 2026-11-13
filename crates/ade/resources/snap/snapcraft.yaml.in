@@ -10,15 +10,15 @@ description: |
 grade: stable
 confinement: classic
 compression: lzo
-website: https://ade.dstrml.org/
-source-code: https://github.com/dstrml/ade
-issues: https://github.com/dstrml/ade/issues
-contact: https://github.com/dstrml/ade/issues
+website: https://luokyme.github.io/ade/
+source-code: https://github.com/luokyme/ade
+issues: https://github.com/luokyme/ade/issues
+contact: https://github.com/luokyme/ade/issues
 
 parts:
   ade:
     plugin: dump
-    source: "https://github.com/dstrml/ade/releases/download/v$RELEASE_VERSION/ade-linux-x86_64.tar.gz"
+    source: "https://github.com/luokyme/ade/releases/download/v$RELEASE_VERSION/ade-linux-x86_64.tar.gz"
 
     organize:
       # These renames seem to not be necessary, but it's tidier.

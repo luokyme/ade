@@ -10,4 +10,4 @@
 
 ## 仓库与远端
 
-- `origin` = `dstrml/wu`（组织 `dstrml`），`luokyme` = `git@github.com:luokyme/ade.git`（个人 fork，已推送完整历史）。上游改名相关事项见 [decisions/product-name.md](../decisions/product-name.md)。
+- `origin` = `git@github.com:luokyme/ade.git`（自己的 fork，push 用它）；`upstream` = `https://github.com/dstrml/wu.git`（只读参考，已无写权限）。仓库与站点的归属决策见 [decisions/product-name.md](../decisions/product-name.md) 的 PRODUCT-002。

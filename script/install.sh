@@ -9,7 +9,7 @@ main() {
     platform="$(uname -s)"
     arch="$(uname -m)"
     channel="${ADE_CHANNEL:-${ZED_CHANNEL:-stable}}"
-    repo="dstrml/ade"
+    repo="luokyme/ade"
     version="${ADE_VERSION:-${ZED_VERSION:-latest}}"
     bundle_path="${ADE_BUNDLE_PATH:-${ZED_BUNDLE_PATH:-}}"
     if [ "$version" = "latest" ]; then

@@ -15,7 +15,7 @@ Ade 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代�
 ## 功能
 
 - ⚡ **原生、快速。** 不用 Electron，也没有网页视图。打开就能用，大型视图下也一直流畅。
-- 🍃 **轻量。** Ade 占用的内存比 VS Code 和 Zed 都少。查看[测试结果](https://github.com/dstrml/ade/blob/main/docs/memory-benchmark.md)。
+- 🍃 **轻量。** Ade 占用的内存比 VS Code 和 Zed 都少。查看[测试结果](https://github.com/luokyme/ade/blob/main/docs/memory-benchmark.md)。
 - 👾 **内置编程智能体。** 直接支持 Claude Code、Codex 和 OpenCode。
 - ✨ **默认就好看。** 外观简洁现代，用起来也顺手。
 - 🤫 **无需账号，没有遥测。** 不用登录任何东西。Ade 从不把你的使用数据发送到任何地方。
@@ -25,30 +25,30 @@ Ade 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代�
 在 macOS 和 Linux 上运行：
 
 ```sh
-curl -fsSL https://ade.dstrml.org/install.sh | sh
+curl -fsSL https://luokyme.github.io/ade/install.sh | sh
 ```
 
-Windows 用户请下载[安装程序](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.exe)。
+Windows 用户请下载[安装程序](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.exe)。
 
 <details>
 <summary>或者手动安装</summary>
 
-- [macOS（Apple 芯片）](https://github.com/dstrml/ade/releases/latest/download/Ade-aarch64.dmg)
-- [macOS（Intel 芯片）](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.dmg)
-- [Windows x86-64](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.exe)
-- [Linux x86-64](https://github.com/dstrml/ade/releases/latest/download/ade-linux-x86_64.tar.gz)
-- [Linux AArch64](https://github.com/dstrml/ade/releases/latest/download/ade-linux-aarch64.tar.gz)
+- [macOS（Apple 芯片）](https://github.com/luokyme/ade/releases/latest/download/Ade-aarch64.dmg)
+- [macOS（Intel 芯片）](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.dmg)
+- [Windows x86-64](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.exe)
+- [Linux x86-64](https://github.com/luokyme/ade/releases/latest/download/ade-linux-x86_64.tar.gz)
+- [Linux AArch64](https://github.com/luokyme/ade/releases/latest/download/ade-linux-aarch64.tar.gz)
 
-更多内容请看 [INSTALL.md](https://github.com/dstrml/ade/blob/main/docs/INSTALL.md)。
+更多内容请看 [INSTALL.md](https://github.com/luokyme/ade/blob/main/docs/INSTALL.md)。
 </details>
 
 ---
 
-![Ade 截图](https://ade.dstrml.org/screenshot.png)
+![Ade 截图](https://luokyme.github.io/ade/screenshot.png)
 
 ## 文档
 
-请看[文档](https://ade.dstrml.org/zh/)。
+请看[文档](https://luokyme.github.io/ade/zh/)。
 
 ## 构建
 

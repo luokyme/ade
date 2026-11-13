@@ -9,5 +9,12 @@
 - 理由：用户要求把项目从 Wu 改名为 Ade，并重新挑选 logo；旧名 "Wu" 取自人名，与新定位不符。
 - 依据：用户 2026-11-13 明确要求"本项目改名为ade, 并挑选个合适的logo"。
 - 关联：`crates/ade`、`crates/ade_actions`、`crates/ade_env_vars`、`assets/images/ade_logo.svg`、`assets/icons/ade_mark.svg`、`crates/ade/resources/app-icon*.png`。
-- 状态（2026-11-13 核对）：域名已切换为 `ade.dstrml.org`，代码、README、website（`website/src/consts.ts`）中的 `REPO_URL` 均已指向 `dstrml/ade`；GitHub 上仓库仍名为 `dstrml/wu`（属组织 `dstrml`），需组织管理员执行改名（`PATCH https://api.github.com/repos/dstrml/wu -d '{"name":"ade"}'` 或组织设置页改名），改名后本地 `origin` 更新为 `git@github.com:dstrml/ade.git`。在改名完成前 `script/install.sh` 的 release 下载地址不可用。
-- 补充：个人 fork 仓库为 `git@github.com:luokyme/ade.git`，已推送完整历史。
+- 状态（2026-11-13 核对）：仓库与站点归属见 PRODUCT-002；原 `dstrml/wu` 不再改名（无权限），所有对外链接已迁到 `luokyme/ade` 与 `https://luokyme.github.io/ade`。
+
+### PRODUCT-002 仓库与站点归属 luokyme
+
+- 状态：有效
+- 决策：项目的对外仓库、release 下载源、文档站点与全部外链统一指向 luokyme 名下：仓库 `luokyme/ade`，站点 `https://luokyme.github.io/ade`；代码、脚本、README、桌面/flatpak/snap/Windows 打包资源中不得再出现 `dstrml.org` 域名或 `dstrml/ade`、`dstrml/wu` 仓库地址。
+- 理由：项目已从 dstrml fork，用户不再拥有原仓库与域名的权限，继续引用会让安装脚本、自动更新检查与文档链接指向无权访问的位置。
+- 依据：用户 2026-11-13 明确要求“dstrml.org 肯定得全部改掉，我是 fork 出来的，现在没有原来那些权限”。
+- 关联：`website/src/consts.ts`、`script/install.sh`、`crates/auto_update/src/auto_update.rs`、`crates/ade/src/ade.rs`。

@@ -344,13 +344,13 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
                 MenuItem::action(
                     t!("Documentation"),
                     super::OpenBrowser {
-                        url: "https://ade.dstrml.org/docs".into(),
+                        url: "https://luokyme.github.io/ade/docs".into(),
                     },
                 ),
                 MenuItem::action(
                     t!("Ade Repository"),
                     super::OpenBrowser {
-                        url: "https://github.com/dstrml/ade".into(),
+                        url: "https://github.com/luokyme/ade".into(),
                     },
                 ),
             ],

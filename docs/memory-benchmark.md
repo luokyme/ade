@@ -5,7 +5,7 @@ Ade used less settled process memory than Zed and VS Code in every measured stag
 1. **Zed:** Ade used 9.0–10.0% less at idle and 6.7–58.2% less in the workspace workflow.
 2. **VS Code:** Ade used 48% less at idle and 14.5–38.6% less in the workspace workflow.
 
-Tested using the official Linux ARM64 releases of [Ade 1.0.10](https://github.com/dstrml/ade/releases/tag/v1.0.10), [Zed 1.21.0](https://github.com/zed-industries/zed/releases/tag/v1.21.0), and [VS Code 1.139.1](https://code.visualstudio.com/updates/v1_139).
+Tested using the official Linux ARM64 releases of [Ade 1.0.10](https://github.com/luokyme/ade/releases/tag/v1.0.10), [Zed 1.21.0](https://github.com/zed-industries/zed/releases/tag/v1.21.0), and [VS Code 1.139.1](https://code.visualstudio.com/updates/v1_139).
 
 > These are software-rendered Linux VPS results. All editors ran real graphical interfaces through Xvfb and Mesa llvmpipe, which renders on the CPU. The numbers are not estimates of memory use on a hardware-GPU desktop.
 

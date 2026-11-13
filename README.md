@@ -15,7 +15,7 @@ Ade is a fast, native code editor written in Rust, with a clean, modern design a
 ## Features
 
 - ⚡ **Native and fast.** No Electron or webviews. Opens instantly and stays responsive on large views.
-- 🍃 **Lightweight.** Ade's memory footprint is lower than VS Code and Zed. See [benchmarks](https://github.com/dstrml/ade/blob/main/docs/memory-benchmark.md).
+- 🍃 **Lightweight.** Ade's memory footprint is lower than VS Code and Zed. See [benchmarks](https://github.com/luokyme/ade/blob/main/docs/memory-benchmark.md).
 - 👾 **Coding agents included.** Built-in support for Claude Code, Codex, and OpenCode.
 - ✨ **Beautiful by default.** Clean, modern look with a delightful UX.
 - 🤫 **No account or telemetry.** Nothing to sign in to. Ade never sends your usage data anywhere.
@@ -25,30 +25,30 @@ Ade is a fast, native code editor written in Rust, with a clean, modern design a
 On macOS and Linux, run:
 
 ```sh
-curl -fsSL https://ade.dstrml.org/install.sh | sh
+curl -fsSL https://luokyme.github.io/ade/install.sh | sh
 ```
 
-For Windows, download the [installer](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.exe).
+For Windows, download the [installer](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.exe).
 
 <details>
 <summary>Or install manually</summary>
 
-- [macOS (Apple Silicon)](https://github.com/dstrml/ade/releases/latest/download/Ade-aarch64.dmg)
-- [macOS (Intel)](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.dmg)
-- [Windows x86-64](https://github.com/dstrml/ade/releases/latest/download/Ade-x86_64.exe)
-- [Linux x86-64](https://github.com/dstrml/ade/releases/latest/download/ade-linux-x86_64.tar.gz)
-- [Linux AArch64](https://github.com/dstrml/ade/releases/latest/download/ade-linux-aarch64.tar.gz)
+- [macOS (Apple Silicon)](https://github.com/luokyme/ade/releases/latest/download/Ade-aarch64.dmg)
+- [macOS (Intel)](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.dmg)
+- [Windows x86-64](https://github.com/luokyme/ade/releases/latest/download/Ade-x86_64.exe)
+- [Linux x86-64](https://github.com/luokyme/ade/releases/latest/download/ade-linux-x86_64.tar.gz)
+- [Linux AArch64](https://github.com/luokyme/ade/releases/latest/download/ade-linux-aarch64.tar.gz)
 
-See [INSTALL.md](https://github.com/dstrml/ade/blob/main/docs/INSTALL.md) for more.
+See [INSTALL.md](https://github.com/luokyme/ade/blob/main/docs/INSTALL.md) for more.
 </details>
 
 ---
 
-![Ade screenshot](https://ade.dstrml.org/screenshot.png)
+![Ade screenshot](https://luokyme.github.io/ade/screenshot.png)
 
 ## Docs
 
-See [docs](https://ade.dstrml.org).
+See [docs](https://luokyme.github.io/ade).
 
 ## Building
 

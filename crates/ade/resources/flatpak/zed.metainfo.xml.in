@@ -31,11 +31,11 @@
 
     <content_rating type="oars-1.1" />
 
-    <url type="homepage">https://ade.dstrml.org</url>
-    <url type="bugtracker">https://github.com/dstrml/ade/issues</url>
-    <url type="help">https://ade.dstrml.org/docs</url>
-    <url type="contact">https://github.com/dstrml/ade/issues</url>
-    <url type="vcs-browser">https://github.com/dstrml/ade</url>
+    <url type="homepage">https://luokyme.github.io/ade</url>
+    <url type="bugtracker">https://github.com/luokyme/ade/issues</url>
+    <url type="help">https://luokyme.github.io/ade/docs</url>
+    <url type="contact">https://github.com/luokyme/ade/issues</url>
+    <url type="vcs-browser">https://github.com/luokyme/ade</url>
 
     <supports>
         <internet>offline-only</internet>
@@ -49,7 +49,7 @@
     <screenshots>
         <screenshot type="default">
             <caption>Ade with a project open</caption>
-            <image>https://ade.dstrml.org/screenshot.png</image>
+            <image>https://luokyme.github.io/ade/screenshot.png</image>
         </screenshot>
     </screenshots>
 
