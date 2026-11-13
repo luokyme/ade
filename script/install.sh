@@ -93,31 +93,27 @@ linux() {
         curl "$download_base/ade-linux-$arch.tar.gz" > "$temp/ade-linux-$arch.tar.gz"
     fi
 
-    suffix=""
-    if [ "$channel" != "stable" ]; then
-        suffix="-$channel"
+    appid="me.farshed.Ade"
+    tar -xzf "$temp/ade-linux-$arch.tar.gz" -C "$temp"
+    bundle_dir="$temp/ade.app"
+    if [ ! -d "$bundle_dir" ] && [ -d "$temp/ade-$channel.app" ]; then
+        bundle_dir="$temp/ade-$channel.app"
     fi
+    if [ ! -x "$bundle_dir/libexec/ade-editor" ] || [ ! -x "$bundle_dir/bin/ade" ]; then
+        echo "Invalid Ade bundle: editor or CLI is missing"
+        exit 1
+    fi
+    desktop_source="$bundle_dir/share/applications/$appid.desktop"
+    if [ ! -f "$desktop_source" ]; then
+        desktop_source="$bundle_dir/share/applications/me.farshed.Ade-Dev.desktop"
+    fi
+    cp "$desktop_source" "$temp/Ade.desktop"
 
-    appid=""
-    case "$channel" in
-      stable)
-        appid="me.farshed.Ade"
-        ;;
-      dev)
-        appid="me.farshed.Ade-Dev"
-        ;;
-      *)
-        echo "Unknown release channel: ${channel}. Using stable app ID."
-        appid="me.farshed.Ade"
-        ;;
-    esac
+    mkdir -p "$HOME/.local"
+    rm -rf "$HOME/.local/ade.app"
+    mv "$bundle_dir" "$HOME/.local/ade.app"
 
-    # Unpack
-    rm -rf "$HOME/.local/ade$suffix.app"
-    mkdir -p "$HOME/.local/ade$suffix.app"
-    tar -xzf "$temp/ade-linux-$arch.tar.gz" -C "$HOME/.local/"
-
-    ade_editor="$HOME/.local/ade$suffix.app/libexec/ade-editor"
+    ade_editor="$HOME/.local/ade.app/libexec/ade-editor"
     if [ -f "$ade_editor" ] && command -v ldd >/dev/null 2>&1; then
         missing="$(ldd "$ade_editor" 2>/dev/null | sed -n 's/^[[:space:]]*\(.*\) => not found$/\1/p')"
         if [ -n "$missing" ]; then
@@ -131,14 +127,18 @@ linux() {
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
 
     # Link the binary
-    ln -sf "$HOME/.local/ade$suffix.app/bin/ade" "$HOME/.local/bin/ade"
+    ln -sf "$HOME/.local/ade.app/bin/ade" "$HOME/.local/bin/ade"
 
     # Copy .desktop file
     desktop_file_path="$HOME/.local/share/applications/${appid}.desktop"
-    src_dir="$HOME/.local/ade$suffix.app/share/applications"
-    cp "$src_dir/${appid}.desktop" "${desktop_file_path}"
-    sed -i "s|Icon=ade|Icon=$HOME/.local/ade$suffix.app/share/icons/hicolor/512x512/apps/ade.png|g" "${desktop_file_path}"
-    sed -i "s|Exec=ade|Exec=$HOME/.local/ade$suffix.app/bin/ade|g" "${desktop_file_path}"
+    cp "$temp/Ade.desktop" "${desktop_file_path}"
+    sed -i "s/^Name=Ade Dev$/Name=Ade/" "${desktop_file_path}"
+    sed -i "s|Icon=ade|Icon=$HOME/.local/ade.app/share/icons/hicolor/512x512/apps/ade.png|g" "${desktop_file_path}"
+    sed -i "s|Exec=ade|Exec=$HOME/.local/ade.app/bin/ade|g" "${desktop_file_path}"
+    rm -f "$HOME/.local/share/applications/me.farshed.Ade-Dev.desktop"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$HOME/.local/share/applications"
+    fi
 }
 
 macos() {

@@ -45,7 +45,7 @@ pub fn compile(manifest: bool) -> Result<(), Box<dyn std::error::Error>> {
     let channel = option_env!("RELEASE_CHANNEL").unwrap_or("dev");
     let (icon_filename, product_name) = match channel {
         "stable" => ("app-icon.ico", "Ade"),
-        _ => ("app-icon-dev.ico", "Ade Dev"),
+        _ => ("app-icon-dev.ico", "Ade"),
     };
     let icon = std::path::PathBuf::from(ICON_DIR).join(icon_filename);
     let icon_escaped = icon.to_string_lossy().replace('\\', "\\\\");

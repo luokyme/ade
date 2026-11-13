@@ -197,14 +197,14 @@ function BuildInstaller {
             $appId = "{{3EF9FC05-FE00-4BD0-941C-21F3BA4E6952}"
             $oldAppId = "8357632E-24A4-4F32-BA97-E575B4D1FE5D"
             $appIconName = "app-icon-dev"
-            $appName = "Ade Dev"
-            $appDisplayName = "Ade Dev"
+            $appName = "Ade"
+            $appDisplayName = "Ade"
             $appSetupName = "Ade-$Architecture"
             $appMutex = "Ade-Editor-Dev-Instance-Mutex"
             $appExeName = "Ade"
             $regValueName = "AdeDev"
             $appUserId = "Farshed.Ade.Dev"
-            $appShellNameShort = "W&u Dev"
+            $appShellNameShort = "&Ade"
             $appAppxFullName = "Farshed.Ade_1.0.0.0_neutral__japxn1gcva8rg"
         }
         default {

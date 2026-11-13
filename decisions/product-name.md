@@ -11,6 +11,8 @@
 - 关联：`crates/ade`、`crates/ade_actions`、`crates/ade_env_vars`、`assets/images/ade_logo.svg`、`assets/icons/ade_mark.svg`、`crates/ade/resources/app-icon*.png`。
 - 状态（2026-11-13 核对）：仓库与站点归属见 PRODUCT-002；原 `dstrml/wu` 不再改名（无权限），所有对外链接已迁到 `luokyme/ade` 与 `https://luokyme.github.io/ade`。
 
+- 澄清：所有构建渠道的应用显示名称均为 Ade，不添加 Dev / -Dev 后缀；桌面入口及应用标识保持一致（用户 2026-11-13 明确指出“名称中的-Dev是画蛇添足，我从没要求过加这个”）。
+
 ### PRODUCT-002 仓库与站点归属 luokyme
 
 - 状态：有效

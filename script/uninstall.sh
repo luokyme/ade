@@ -32,7 +32,7 @@ prompt_remove_preferences() {
 
 main() {
     platform="$(uname -s)"
-    channel="${ZED_CHANNEL:-stable}"
+    channel="${ADE_CHANNEL:-${ZED_CHANNEL:-stable}}"
 
     if [ "$platform" = "Darwin" ]; then
         platform="macos"
@@ -49,31 +49,14 @@ main() {
 }
 
 linux() {
-    suffix=""
-    if [ "$channel" != "stable" ]; then
-        suffix="-$channel"
-    fi
-
-    appid=""
-    db_suffix="stable"
+    appid="me.farshed.Ade"
     case "$channel" in
-      stable)
-        appid="me.farshed.Ade"
-        db_suffix="stable"
-        ;;
-      dev)
-        appid="me.farshed.Ade-Dev"
-        db_suffix="dev"
-        ;;
-      *)
-        echo "Unknown release channel: ${channel}. Using stable app ID."
-        appid="me.farshed.Ade"
-        db_suffix="stable"
-        ;;
+      dev) db_suffix="dev" ;;
+      *) db_suffix="stable" ;;
     esac
 
     # Remove the app directory
-    rm -rf "$HOME/.local/ade$suffix.app"
+    rm -rf "$HOME/.local/ade.app"
 
     # Remove the binary symlink
     rm -f "$HOME/.local/bin/ade"
@@ -102,9 +85,7 @@ macos() {
     app_id="me.farshed.Ade"
     case "$channel" in
       dev)
-        app="Ade Dev.app"
         db_suffix="dev"
-        app_id="me.farshed.Ade-Dev"
         ;;
     esac
 

@@ -191,10 +191,7 @@ impl ReleaseChannel {
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
-        match self {
-            ReleaseChannel::Dev => "Ade Dev",
-            ReleaseChannel::Stable => "Ade",
-        }
+        "Ade"
     }
 
     /// Returns the programmatic name for this [`ReleaseChannel`].
@@ -209,10 +206,7 @@ impl ReleaseChannel {
     /// and WM_CLASS on X11.
     /// This also has to match the bundle identifier for Zed on macOS.
     pub fn app_id(&self) -> &'static str {
-        match self {
-            ReleaseChannel::Dev => "me.farshed.Ade-Dev",
-            ReleaseChannel::Stable => "me.farshed.Ade",
-        }
+        "me.farshed.Ade"
     }
 
 
