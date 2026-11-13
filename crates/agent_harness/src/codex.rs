@@ -1146,6 +1146,7 @@ async fn run_session(session: Session) {
         .flatten()
         .is_some();
     let mut done_after_interrupt = false;
+    let mut async_question_items = HashSet::new();
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     'main: loop {
@@ -1222,6 +1223,13 @@ async fn run_session(session: Session) {
                         if matches!(item_type(item), "agentMessage" | "agent_message") {
                             if phase == Phase::Completed {
                                 let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                                let questions = normalize::async_user_input_questions(item);
+                                if !questions.is_empty()
+                                    && async_question_items.insert(id.to_owned())
+                                    && !send(&event_tx, AgentEvent::AsyncInputRequested { questions }).await
+                                {
+                                    break 'main;
+                                }
                                 let text = item.get("text").and_then(Value::as_str).unwrap_or("");
                                 // Newer Codex versions repeat the review as a plain message.
                                 let repeats_review =

@@ -501,6 +501,9 @@ pub enum AgentEvent {
     InputResolved {
         request_id: String,
     },
+    AsyncInputRequested {
+        questions: Vec<UserInputQuestion>,
+    },
     #[serde(rename_all = "camelCase")]
     Steered {
         assistant_message_id: Option<String>,

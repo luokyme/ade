@@ -93,6 +93,37 @@ if has "$turnline" '"method":"review/start"'; then
 fi
 
 case "$turnline" in
+*scenario:async-question*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
+  question='{"method":"item/completed","params":{"item":{"id":"async-1","type":"agentMessage","text":"Pick a color","delivery":"async","questions":[{"title":"Pick a color","options":["Red","Blue"]},{"title":"Why?","options":null}]}}}'
+  emit "$question"
+  emit "$question"
+  if has "$turnline" 'scenario:async-question-working'; then
+    expected_method='"method":"turn/steer"'
+  else
+    emit '{"method":"turn/completed","params":{"turn":{"id":"t-1","status":"completed"}}}'
+    expected_method='"method":"turn/start"'
+  fi
+  read -r answer || exit 1
+  has "$answer" "$expected_method" && has "$answer" 'Blue' && has "$answer" 'Why?' && has "$answer" 'Calming' || exit 1
+  emit "{\"id\":$(rid "$answer"),\"result\":{\"turn\":{\"id\":\"t-2\"}}}"
+  if has "$answer" '"method":"turn/start"'; then
+    emit '{"method":"turn/started","params":{"turn":{"id":"t-2"}}}'
+    emit '{"method":"item/agentMessage/delta","params":{"itemId":"answer-1","delta":"Answer received"}}'
+    emit '{"method":"turn/completed","params":{"turn":{"id":"t-2","status":"completed"}}}'
+  else
+    emit '{"method":"item/agentMessage/delta","params":{"itemId":"answer-1","delta":"Answer received"}}'
+    emit '{"method":"turn/completed","params":{"turn":{"id":"t-1","status":"completed"}}}'
+  fi
+  ;;
+*'Pick a color'*)
+  has "$turnline" 'Blue' && has "$turnline" 'Why?' && has "$turnline" 'Calming' || exit 1
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-2\"}}}"
+  emit '{"method":"turn/started","params":{"turn":{"id":"t-2"}}}'
+  emit '{"method":"item/agentMessage/delta","params":{"itemId":"answer-1","delta":"Answer received"}}'
+  emit '{"method":"turn/completed","params":{"turn":{"id":"t-2","status":"completed"}}}'
+  ;;
 *scenario:native-skills*)
   for want in '"type":"skill"' '"name":"review"' '"path":"/repo/a b/SKILL.md"'; do
     has "$turnline" "$want" || { fail_turn "$tid" "initial native skill missing"; exit 0; }

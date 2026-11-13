@@ -413,6 +413,8 @@ enum SavedTranscript {
         subagents: Vec<SavedSubagent>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         queue: Vec<SavedPrompt>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        async_questions: Vec<Vec<UserInputQuestion>>,
     },
 }
 
@@ -863,13 +865,14 @@ impl AgentSession {
         languages: Arc<LanguageRegistry>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (entries, saved_subagents, saved_queue) = match saved {
+        let (entries, saved_subagents, saved_queue, async_questions) = match saved {
             SavedTranscript::Current {
                 entries,
                 subagents,
                 queue,
-            } => (entries, subagents, queue),
-            SavedTranscript::EntriesOnly(entries) => (entries, Vec::new(), Vec::new()),
+                async_questions,
+            } => (entries, subagents, queue, async_questions),
+            SavedTranscript::EntriesOnly(entries) => (entries, Vec::new(), Vec::new(), Vec::new()),
         };
         let transcript = Transcript::load(entries, &languages, cx);
         let subagents = saved_subagents
@@ -916,7 +919,14 @@ impl AgentSession {
             next_queue_id: u64::MAX / 2,
             editing_queued: None,
             deleted: false,
-            pending_questions: Vec::new(),
+            pending_questions: async_questions
+                .into_iter()
+                .filter(|questions| !questions.is_empty())
+                .map(|questions| PendingQuestion {
+                    questions,
+                    responder: None,
+                })
+                .collect(),
             noticed_auto_unavailable: false,
             languages,
             save_metadata_task: Task::ready(()),
@@ -1090,6 +1100,11 @@ impl AgentSession {
         prompt.text = prompt.text.trim().to_string();
         if prompt.is_empty() || self.deleted {
             return;
+        }
+        self.pending_questions
+            .retain(|pending| pending.responder.is_some());
+        if self.pending_questions.is_empty() {
+            cx.dismiss_system_notification(&self.metadata.id);
         }
         let stopping = self
             .run
@@ -1385,12 +1400,38 @@ impl AgentSession {
         else {
             return;
         };
+        let Some(pending) = self.pending_questions.get(index) else {
+            return;
+        };
+        let prompt = if pending.responder.is_none() {
+            let mut responses = Vec::new();
+            for question in &pending.questions {
+                let Some(answer) = answers
+                    .iter()
+                    .find(|answer| answer.question_id == question.id)
+                    .filter(|answer| answer.labels.iter().any(|label| !label.trim().is_empty()))
+                else {
+                    return;
+                };
+                responses.push(format!(
+                    "{}\n{}",
+                    question.question,
+                    answer.labels.join(", ")
+                ));
+            }
+            Some(Prompt::text(responses.join("\n\n")))
+        } else {
+            None
+        };
         let mut pending = self.pending_questions.remove(index);
         cx.dismiss_system_notification(&self.metadata.id);
         if let Some(responder) = pending.responder.take()
             && responder.send(answers).is_err()
         {
             log::debug!("agent stopped waiting for an answer");
+        }
+        if let Some(prompt) = prompt {
+            self.deliver(prompt, cx);
         }
         cx.notify();
     }
@@ -1631,7 +1672,8 @@ impl AgentSession {
         self.run = None;
         self.background_tasks.clear();
         self.known_tasks.clear();
-        self.pending_questions.clear();
+        self.pending_questions
+            .retain(|pending| pending.responder.is_none());
         self.cancel_running_tools();
         for subagent in self.subagents.values_mut() {
             subagent.transcript.cancel_running_tools();
@@ -1718,6 +1760,21 @@ impl AgentSession {
 
     fn apply_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
         match event {
+            AgentEvent::AsyncInputRequested { questions } => {
+                if !questions.is_empty()
+                    && !self.pending_questions.iter().any(|pending| {
+                        pending.questions.first().map(|question| &question.id)
+                            == questions.first().map(|question| &question.id)
+                    })
+                {
+                    self.pending_questions.push(PendingQuestion {
+                        questions,
+                        responder: None,
+                    });
+                    self.save_entries(cx);
+                    cx.emit(SessionEvent::NeedsInput);
+                }
+            }
             AgentEvent::SessionStarted { session_id, .. } => {
                 if !session_id.is_empty() {
                     self.set_native_session_id(session_id, cx);
@@ -1800,7 +1857,9 @@ impl AgentSession {
                     DoneStatus::Completed => {
                         self.metadata.outcome = Some(ChatOutcome::Completed);
                         self.metadata.unseen = true;
-                        cx.emit(SessionEvent::Finished { errored: false });
+                        if self.pending_questions.is_empty() {
+                            cx.emit(SessionEvent::Finished { errored: false });
+                        }
                     }
                     DoneStatus::Interrupted => {
                         if self.user_stopped && self.turn_prompts == 1 {
@@ -2113,7 +2172,17 @@ impl AgentSession {
         SavedTranscript::Current {
             entries: self.transcript.serialize(cx),
             subagents,
-            queue: self.queue.iter().map(|queued| (&queued.prompt).into()).collect(),
+            queue: self
+                .queue
+                .iter()
+                .map(|queued| (&queued.prompt).into())
+                .collect(),
+            async_questions: self
+                .pending_questions
+                .iter()
+                .filter(|pending| pending.responder.is_none())
+                .map(|pending| pending.questions.clone())
+                .collect(),
         }
     }
 
@@ -4016,6 +4085,160 @@ pub(crate) mod tests {
         });
         assert_eq!(summaries.len(), 1);
         assert!(!summaries[0].working);
+    }
+
+    #[cfg(unix)]
+    #[gpui::test]
+    async fn async_questions_send_answers_during_and_after_a_turn(cx: &mut TestAppContext) {
+        for (prompt, reopen) in [
+            ("scenario:async-question-working", false),
+            ("scenario:async-question", false),
+            ("scenario:async-question", true),
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let store = new_store(directory.path(), cx);
+            store.update(cx, |store, _| {
+                store.harnesses.insert(
+                    AgentKind::Codex,
+                    Arc::new(
+                        CodexHarness::new().with_executable(
+                            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                                .join("../agent_harness/tests/fixtures/fake-codex.sh"),
+                        ),
+                    ),
+                );
+            });
+            let session = store.update(cx, |store, cx| {
+                store.create_session(AgentKind::Codex, directory.path().to_path_buf(), cx)
+            });
+            session.update(cx, |session, cx| session.send_message(prompt, cx));
+            run_until(cx, |cx| {
+                session.read_with(cx, |session, _| {
+                    !session.pending_questions().is_empty()
+                        && (prompt.ends_with("working") || !session.is_working())
+                })
+            });
+            cx.run_until_parked();
+            let session = if reopen {
+                session.update(cx, |session, cx| session.run_ended(cx));
+                let (saved, metadata, harness, languages) = session.read_with(cx, |session, cx| {
+                    (
+                        session.saved_transcript(cx),
+                        session.metadata.clone(),
+                        session.harness.clone(),
+                        session.languages.clone(),
+                    )
+                });
+                cx.new(|cx| {
+                    AgentSession::new(
+                        directory.path().into(), harness, metadata, saved, languages, cx,
+                    )
+                })
+            } else {
+                session
+            };
+            let (id, answers) = session.read_with(cx, |session, _| {
+                assert_eq!(session.pending_questions().len(), 1, "duplicate completion");
+                let pending = session.pending_questions().first().expect("question panel");
+                assert!(!pending.is_permission());
+                assert_eq!(pending.questions.len(), 2);
+                assert_eq!(pending.questions[0].options, ["Red", "Blue"]);
+                assert!(pending.questions[1].options.is_empty());
+                assert!(
+                    pending
+                        .questions
+                        .iter()
+                        .all(|question| question.accepts_typed_answer)
+                );
+                (
+                    pending.id().to_string(),
+                    pending
+                        .questions
+                        .iter()
+                        .zip(["Blue", "Calming"])
+                        .map(|(question, answer)| UserInputAnswer {
+                            question_id: question.id.clone(),
+                            labels: vec![answer.into()],
+                        })
+                        .collect(),
+                )
+            });
+            session.update(cx, |session, cx| session.answer(&id, answers, cx));
+            run_until(cx, |cx| {
+                session.read_with(cx, |session, cx| {
+                    !session.is_working() && session.entries().iter().any(|entry| {
+                        matches!(entry, Entry::Assistant { markdown, .. } if markdown.read(cx).source().contains("Answer received"))
+                    })
+                })
+            });
+            session.read_with(cx, |session, _| {
+                assert!(session.pending_questions().is_empty());
+                assert!(session.entries().iter().any(|entry| {
+                    matches!(entry, Entry::User { text, .. } if text.as_ref() == "Pick a color\nBlue\n\nWhy?\nCalming")
+                }));
+            });
+        }
+    }
+
+    #[gpui::test]
+    async fn async_questions_survive_run_end_and_saved_chat_reload(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Codex, directory.path().to_path_buf(), cx)
+        });
+        let questions = vec![UserInputQuestion {
+            id: "async:0".into(),
+            header: "Codex question".into(),
+            question: "What are you looking forward to?".into(),
+            options: Vec::new(),
+            multi_select: false,
+            prefill: None,
+            multiline: false,
+            accepts_typed_answer: true,
+        }];
+        let (saved, metadata, harness, languages) = session.update(cx, |session, cx| {
+            session.apply_event(
+                AgentEvent::AsyncInputRequested {
+                    questions: questions.clone(),
+                },
+                cx,
+            );
+            session.run_ended(cx);
+            assert_eq!(session.pending_questions().len(), 1);
+            (
+                serde_json::to_vec(&session.saved_transcript(cx)).expect("serialize questions"),
+                session.metadata.clone(),
+                session.harness.clone(),
+                session.languages.clone(),
+            )
+        });
+        let restored = cx.new(|cx| {
+            AgentSession::new(
+                directory.path().into(),
+                harness,
+                metadata,
+                serde_json::from_slice(&saved).expect("restore questions"),
+                languages,
+                cx,
+            )
+        });
+        restored.update(cx, |session, cx| {
+            assert_eq!(
+                session
+                    .pending_questions()
+                    .first()
+                    .expect("restored panel")
+                    .questions,
+                questions
+            );
+            session.answer("async:0", Vec::new(), cx);
+            assert_eq!(
+                session.pending_questions().len(),
+                1,
+                "empty answers keep the panel"
+            );
+        });
     }
 
     #[gpui::test]

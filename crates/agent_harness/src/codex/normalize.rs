@@ -1,4 +1,6 @@
-use crate::{AgentEvent, DoneStatus, ExternalSession, TodoItem, TodoStatus, ToolCall};
+use crate::{
+    AgentEvent, DoneStatus, ExternalSession, TodoItem, TodoStatus, ToolCall, UserInputQuestion,
+};
 use i18n::{SharedString, t};
 use serde_json::Value;
 
@@ -87,6 +89,43 @@ impl ReasoningStream {
 
 pub(crate) fn item_id(params: &Value) -> String {
     str_field(params, &["itemId", "item_id"])
+}
+
+pub(crate) fn async_user_input_questions(item: &Value) -> Vec<UserInputQuestion> {
+    if item.get("delivery").and_then(Value::as_str) != Some("async") {
+        return Vec::new();
+    }
+    let item_id = item.get("id").and_then(Value::as_str).unwrap_or_default();
+    item.get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, question)| {
+            let title = question.get("title")?.as_str()?.trim();
+            if title.is_empty() {
+                return None;
+            }
+            Some(UserInputQuestion {
+                id: format!("{item_id}:{index}"),
+                header: t!("Codex question").to_string(),
+                question: title.to_owned(),
+                options: question
+                    .get("options")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .filter(|option| !option.trim().is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                multi_select: false,
+                prefill: None,
+                multiline: false,
+                accepts_typed_answer: true,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn turn_id(params: &Value) -> String {
