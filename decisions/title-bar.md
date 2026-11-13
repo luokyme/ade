@@ -10,7 +10,7 @@
 - 否决：保留 `show_branch_name` / `show_worktree_name` / `show_branch_status_icon` / `show_menus` 四个标题栏设置项——用户要求移除工作树与分支显示能力并让菜单栏常显，保留开关会给出无效或名义上的配置项。
 - 依据：用户 2026-11-13 明确要求"移除顶部显示工作树和分支的功能，保留'最近的项目'，同时让菜单栏常显"。
 - 关联：`crates/title_bar/src/title_bar.rs`、`crates/title_bar/src/application_menu.rs`、`crates/settings_content/src/title_bar.rs`（`title_bar` 设置仅剩 `show_project_items`、`show_onboarding_banner`、`button_layout`）。
-- 澄清：“最近的项目”入口固定在标题栏左侧、菜单栏旁边，不居中、不移入标题栏中部（用户 2026-11-13 明确要求“最近的项目位置不要改”）。
+- 澄清：“最近的项目”入口（项目名按钮及其最近项目弹层）保持在标题栏中部居中，位置不再改动（用户 2026-11-13 要求“最近的项目位置不要改”，并确认居中为正确状态）。
 
 ### TITLEBAR-002 状态栏默认显示在标题栏右侧，位置可配置
 
