@@ -1,3 +1,33 @@
+# 项目记忆与阅读入口
+
+- 接手任务或切换工作主题时，按下方工作线索引选择相关记忆；没有相关项则不读，不批量加载整个 `memory/`。
+- 涉及已登记设计域的设计、编码、修复或审查，先读取对应决策文件。已读取且仍在上下文中的规则可以复用。
+- 根 `AGENTS.md` 维护全局行为与索引，目录内 `AGENTS.md` 只补充该目录规则，不复制根规则。
+- 长期行为要求写入适用的 `AGENTS.md`；跨会话上下文写入 `memory/`；用户确认的稳定产品或架构选择写入 `decisions/`。
+
+## 项目记忆
+
+- 工作线索引是统一入口，只列文件路径和涵盖范围，详细上下文保存在 `memory/`。
+- 仅收录后续独立任务仍需使用、且难以从代码、配置、Git 历史或现有规则恢复的信息；普通排查、修复、构建和测试结果默认不写入长期记忆。
+- 维护前读取 [memory/AGENTS.md](memory/AGENTS.md)，日常查阅无需额外读取维护规则。任务收尾只检查更新必要性，不要求每次产生记忆。
+
+### 工作线索引
+
+| 记忆文件路径 | 涵盖范围 |
+| --- | --- |
+| [memory/git-ui.md](memory/git-ui.md) | Git 面板的用户偏好与 Repositories 范围确认 |
+
+## 设计决策
+
+- 设计决策索引是用户确认的稳定设计选择的统一入口；登记或变更前读取 [decisions/AGENTS.md](decisions/AGENTS.md)。
+- 有效决策作为需求、设计和验收依据；与记忆冲突时以决策为准并修正记忆。审查时将违反有效决策列为问题。
+- 新要求或方案与有效决策冲突时，说明编号、冲突和影响，由用户决定保持原决策或以新决策取代；用户已明确要求变更的，按该要求登记替代条目，无需重复确认。
+- 用户明确确认符合收录门槛的选择后，在当次任务内登记。实现授权不自动确认候选方案和未决假设。
+
+### 设计决策索引
+
+暂无已登记的设计决策。新增时在此列出决策文件路径、编号前缀和涵盖范围。
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
@@ -134,6 +164,8 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Build guidelines
 
 - Use `./script/clippy` instead of `cargo clippy`
+- 每次完成修改后、交付前，必须构建完整的 Wu 可执行程序：`cargo build -p wu --bin wu`。`cargo check`、单个 crate 构建和测试构建不能替代完整构建；用户本次明确指定其他构建方式或跳过构建时，遵循该指示。
+- 构建失败时处理与本次修改相关的问题；环境或既有问题阻塞时，明确说明原因，不宣称构建成功。交付时区分源码验证、完整构建与应用是否已重启。
 
 # Pull request hygiene
 
@@ -158,6 +190,8 @@ Release Notes:
 # Rules Hygiene
 
 These rules are read by every agent session. Keep them high-signal.
+
+用户明确要求维护规则、记忆系统或长期工作要求时，可直接更新相应文件；下方禁止顺手新增规则的约束适用于普通功能与修复工作。记忆和设计决策分别遵循各目录的维护规则。
 
 ## After any agentic session
 If you discover a non-obvious pattern that would help future sessions, include a **"Suggested rules additions"** heading in your PR description with the proposed text. Do **not** edit rules inline during normal feature/fix work. Reviewers decide what gets merged.
