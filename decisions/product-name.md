@@ -1,0 +1,12 @@
+# 产品名称决策
+
+本文件适用于项目对外名称及其衍生命名空间，编号前缀 `PRODUCT`。
+
+### PRODUCT-001 产品名为 Ade
+
+- 状态：有效
+- 决策：项目对外名称统一为 Ade；crate、二进制、动作命名空间、URL scheme、环境变量前缀、配置与数据目录、项目级目录一律使用 ade 命名（`crates/ade`、`crates/ade_actions`、`crates/ade_env_vars`、`ade::`、`ade://`、`ADE_*`、`~/.config/ade`、`.ade/`）。
+- 理由：用户要求把项目从 Wu 改名为 Ade，并重新挑选 logo；旧名 "Wu" 取自人名，与新定位不符。
+- 依据：用户 2026-11-13 明确要求"本项目改名为ade, 并挑选个合适的logo"。
+- 关联：`crates/ade`、`crates/ade_actions`、`crates/ade_env_vars`、`assets/images/ade_logo.svg`、`assets/icons/ade_mark.svg`、`crates/ade/resources/app-icon*.png`。
+- 待办：仓库改名后，GitHub 仓库 `dstrml/wu` 需同步更名为 `dstrml/ade`，文档域名 `wu.dstrml.org` 需同步调整，否则 `script/install.sh` 的下载地址会失效。

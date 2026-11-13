@@ -29,6 +29,7 @@
 | 决策文件路径 | 编号前缀 | 涵盖范围 |
 | --- | --- | --- |
 | [decisions/title-bar.md](decisions/title-bar.md) | TITLEBAR | 标题栏信息架构：菜单栏常显、不显示工作树与分支、保留最近的项目入口 |
+| [decisions/product-name.md](decisions/product-name.md) | PRODUCT | 产品名称 Ade：crate、动作命名空间、URL scheme、环境变量与目录的统一命名 |
 
 # Rust coding guidelines
 
