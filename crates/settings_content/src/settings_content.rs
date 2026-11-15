@@ -1223,10 +1223,10 @@ pub enum ClaudeCodePermissionDefault {
     Ask,
     #[strum(serialize = "Accept Edits")]
     AcceptEdits,
-    #[default]
     Auto,
     #[strum(serialize = "Don't Ask")]
     DontAsk,
+    #[default]
     Bypass,
 }
 
@@ -1248,11 +1248,11 @@ pub enum ClaudeCodePermissionDefault {
 pub enum CodexPermissionDefault {
     #[strum(serialize = "Read Only")]
     ReadOnly,
-    #[default]
     Auto,
     #[strum(serialize = "Approve for Me")]
     ApproveForMe,
     #[strum(serialize = "Full Access")]
+    #[default]
     FullAccess,
 }
 
@@ -1275,9 +1275,9 @@ pub enum OpencodePermissionDefault {
     Ask,
     #[strum(serialize = "Accept Edits")]
     AcceptEdits,
-    #[default]
     Auto,
     #[strum(serialize = "Full Access")]
+    #[default]
     FullAccess,
 }
 

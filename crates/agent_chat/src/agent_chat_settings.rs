@@ -45,7 +45,7 @@ impl AgentChatSettings {
         self.default_permissions
             .iter()
             .find(|(agent, _)| *agent == kind)
-            .map_or(PermissionMode::Auto, |(_, mode)| *mode)
+            .map_or(PermissionMode::FullAccess, |(_, mode)| *mode)
     }
 
     pub fn agents(&self) -> &[AgentKind] {

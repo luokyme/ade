@@ -3899,6 +3899,9 @@ pub(crate) mod tests {
         let session = store.update(cx, |store, cx| {
             store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
         });
+        session.update(cx, |session, cx| {
+            session.update_settings(|settings| settings.permission = PermissionMode::Auto, cx)
+        });
         let notices = |cx: &mut TestAppContext| {
             session.read_with(cx, |session, cx| {
                 summarize(session.entries(), cx)
@@ -3972,7 +3975,7 @@ pub(crate) mod tests {
         });
         session.update(cx, |session, cx| {
             session.update_settings(
-                |settings| settings.permission = PermissionMode::FullAccess,
+                |settings| settings.permission = PermissionMode::Auto,
                 cx,
             )
         });
@@ -3998,11 +4001,11 @@ pub(crate) mod tests {
         });
         assert_eq!(
             session.read_with(cx, |session, _| session.settings().permission),
-            PermissionMode::Auto
+            PermissionMode::FullAccess
         );
         session.update(cx, |session, cx| {
             session.update_settings(
-                |settings| settings.permission = PermissionMode::FullAccess,
+                |settings| settings.permission = PermissionMode::Auto,
                 cx,
             )
         });
@@ -4017,15 +4020,15 @@ pub(crate) mod tests {
             .expect("chat reopens");
         assert_eq!(
             reopened.read_with(cx, |session, _| session.settings().permission),
-            PermissionMode::FullAccess
+            PermissionMode::Auto
         );
         let fresh = reopened_store.update(cx, |store, cx| {
             store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
         });
         assert_eq!(
             fresh.read_with(cx, |session, _| session.settings().permission),
-            PermissionMode::Auto,
-            "new chats always start in auto"
+            PermissionMode::FullAccess,
+            "new chats use the configured default instead of the previous chat permission"
         );
     }
 
@@ -4249,6 +4252,7 @@ pub(crate) mod tests {
             store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
         });
         session.update(cx, |session, cx| {
+            session.update_settings(|settings| settings.permission = PermissionMode::Auto, cx);
             session.send_message("scenario:askuser", cx)
         });
 
@@ -4496,6 +4500,7 @@ pub(crate) mod tests {
             store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
         });
         session.update(cx, |session, cx| {
+            session.update_settings(|settings| settings.permission = PermissionMode::Auto, cx);
             session.send_message("scenario:askuser", cx)
         });
         run_until(cx, |cx| {
@@ -4547,7 +4552,10 @@ pub(crate) mod tests {
             store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
         });
         claude.read_with(cx, |session, _| {
-            assert_eq!(session.settings(), &RunSettings::default())
+            assert_eq!(session.settings(), &RunSettings {
+                permission: PermissionMode::FullAccess,
+                ..RunSettings::default()
+            })
         });
     }
 
@@ -5595,7 +5603,7 @@ done
             ..RunSettings::default()
         };
         let remembered_without_permission = RunSettings {
-            permission: PermissionMode::Auto,
+            permission: PermissionMode::FullAccess,
             ..remembered.clone()
         };
         store.update(cx, |store, cx| {
@@ -5613,20 +5621,27 @@ done
             remembered_without_permission
         );
 
+        for kind in AgentKind::ALL {
+            assert_eq!(
+                new_chat_settings(kind, cx).permission,
+                PermissionMode::FullAccess
+            );
+        }
+
         update_chat_settings(cx, |content| {
             content.default_effort = Some(settings::AgentChatDefaultEffort::High);
             content.default_permission = Some(settings::AgentChatDefaultPermissionContent {
-                claude_code: Some(settings::ClaudeCodePermissionDefault::Bypass),
+                claude_code: Some(settings::ClaudeCodePermissionDefault::Ask),
                 ..Default::default()
             });
         });
         let claude = new_chat_settings(AgentKind::Claude, cx);
         assert_eq!(claude.model.as_deref(), Some("opus"));
         assert_eq!(claude.reasoning, Some(ReasoningLevel::High));
-        assert_eq!(claude.permission, PermissionMode::FullAccess);
+        assert_eq!(claude.permission, PermissionMode::Ask);
         let codex = new_chat_settings(AgentKind::Codex, cx);
         assert_eq!(codex.reasoning, Some(ReasoningLevel::High));
-        assert_eq!(codex.permission, PermissionMode::Auto);
+        assert_eq!(codex.permission, PermissionMode::FullAccess);
     }
 
     #[test]

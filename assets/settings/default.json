@@ -128,9 +128,9 @@
     // "last_used" keeps the effort of your last chat with that agent.
     "default_effort": "last_used",
     "default_permission": {
-      "claude_code": "auto",
-      "codex": "auto",
-      "opencode": "auto",
+      "claude_code": "bypass",
+      "codex": "full_access",
+      "opencode": "full_access",
     },
     // Agents shown in the new chat menu and in Continue Saved Chat.
     "agents": {

@@ -180,8 +180,8 @@ fn compact_list_height(rows: usize) -> f32 {
     rows * (COMPACT_ROW_HEIGHT + MENU_GAP) + 2. * CARD_INSET
 }
 
-fn full_tray_height(setting_count: usize, has_slider: bool) -> f32 {
-    if setting_count == 0 && !has_slider {
+fn full_tray_height(setting_count: usize, has_slider: bool, permission_height: f32) -> f32 {
+    if setting_count == 0 && !has_slider && permission_height == 0. {
         return 0.;
     }
     let slider = if has_slider {
@@ -189,7 +189,13 @@ fn full_tray_height(setting_count: usize, has_slider: bool) -> f32 {
     } else {
         0.
     };
-    (setting_count as f32 * (FULL_SETTING_HEIGHT + MENU_GAP) + slider + 7.).min(FULL_TRAY_MAX_HEIGHT)
+    (setting_count as f32 * (FULL_SETTING_HEIGHT + MENU_GAP) + slider + permission_height + 7.)
+        .min(FULL_TRAY_MAX_HEIGHT)
+}
+
+fn permission_row_height(kind: AgentKind, height: f32) -> f32 {
+    let rows = PermissionMode::choices(kind.harness_id()).len().div_ceil(2) as f32;
+    rows * (height - 3. * SEGMENT_INSET) + SEGMENT_INSET
 }
 
 fn compact_options_height(count: usize) -> f32 {
@@ -439,7 +445,6 @@ impl Selection {
 enum Page {
     Settings,
     Models,
-    Permissions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -548,19 +553,8 @@ impl ModelPicker {
         cx.notify();
     }
 
-    fn show_permissions(&mut self, cx: &mut Context<Self>) {
-        self.page = Page::Permissions;
-        cx.notify();
-    }
-
-    fn pick_permission(
-        &mut self,
-        mode: PermissionMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn pick_permission(&self, mode: PermissionMode, cx: &mut Context<Self>) {
         self.update_settings(cx, |settings| settings.permission = mode);
-        self.show_settings(window, cx);
     }
 
     fn render_permission_row(
@@ -570,90 +564,71 @@ impl ModelPicker {
         height: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let muted = cx.theme().colors().text_muted;
-        menu_row("picker-setting-permissions", cx)
-            .h(px(height))
-            .py(px(0.))
-            .child(div().flex_1().min_w_0().truncate().child(t!("Permissions")))
-            .child(
-                div()
-                    .max_w(px(120.))
-                    .truncate()
-                    .text_color(permission_color(current, muted, cx))
-                    .child(view::permission_label(current, kind.harness_id())),
-            )
-            .child(glyph(IconName::AgentArrowRight, 12., muted))
-            .on_click(cx.listener(|this, _, _, cx| this.show_permissions(cx)))
-            .into_any_element()
-    }
-
-    fn render_permissions(
-        &self,
-        kind: AgentKind,
-        current: PermissionMode,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let harness = kind.harness_id();
+        let text = colors.text;
+        let muted = colors.text_muted;
         let wash = selected_row(cx);
         let ring = selected_ring(cx);
-        let rows = PermissionMode::choices(harness).iter().map(|&mode| {
-            let selected = mode == current;
-            menu_row(
-                SharedString::from(format!("picker-permission-{mode:?}")),
-                cx,
-            )
-            .when(selected, |this| this.bg(wash).shadow(ring.clone()))
+        let harness = kind.harness_id();
+        let segment_height = height - 4. * SEGMENT_INSET;
+        h_flex()
+            .id("picker-setting-permissions")
+            .gap(px(10.))
+            .pl(px(8.))
+            .pr(px(SEGMENT_INSET))
+            .text_size(ui(13.))
+            .text_color(text.opacity(0.9))
+            .child(div().flex_1().min_w_0().truncate().child(t!("Permissions")))
             .child(
                 v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(1.))
-                    .child(
-                        div()
-                            .text_color(permission_color(mode, colors.text, cx))
-                            .child(view::permission_label(mode, harness)),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui(11.5))
-                            .text_color(colors.text_muted)
-                            .child(view::permission_description(mode, harness)),
-                    ),
-            )
-            .when(selected, |this| {
-                this.child(glyph(IconName::AgentCheck, 12., colors.text_muted))
-            })
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.pick_permission(mode, window, cx)),
-            )
-        });
-        v_flex()
-            .child(
-                h_flex()
-                    .h(px(LIST_HEADER_HEIGHT))
+                    .w(relative(0.7))
                     .flex_none()
-                    .px(px(CARD_INSET))
-                    .border_b_1()
-                    .border_color(hairline(0.08, cx))
-                    .gap(px(4.))
-                    .child(
-                        menu_row("picker-permissions-back", cx)
-                            .flex_none()
-                            .tooltip(Tooltip::text(t!("Back")))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.show_settings(window, cx)),
-                            )
-                            .child(back_glyph(14., colors.text_muted)),
-                    )
-                    .child(
-                        div()
-                            .text_size(ui(13.))
-                            .text_color(colors.text.opacity(0.9))
-                            .child(t!("Permissions")),
-                    ),
+                    .p(px(SEGMENT_INSET))
+                    .gap(px(SEGMENT_INSET))
+                    .rounded(px(MENU_ITEM_RADIUS))
+                    .bg(ink(0.05, cx))
+                    .children(PermissionMode::choices(harness).chunks(2).map(|modes| {
+                        h_flex()
+                            .gap(px(SEGMENT_INSET))
+                            .children(modes.iter().map(|&mode| {
+                                let selected = mode == current;
+                                let resting = permission_color(mode, muted, cx);
+                                let hovered = permission_color(mode, text, cx);
+                                div()
+                                    .id(SharedString::from(format!("picker-permission-{mode:?}")))
+                                    .h(px(segment_height))
+                                    .flex_1()
+                                    .min_w_0()
+                                    .px(px(4.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(MENU_ITEM_RADIUS - SEGMENT_INSET))
+                                    .text_size(ui(12.))
+                                    .cursor_pointer()
+                                    .map(|this| {
+                                        if selected {
+                                            this.bg(wash).text_color(hovered).shadow(ring.clone())
+                                        } else {
+                                            this.text_color(resting)
+                                                .hover(move |style| style.text_color(hovered))
+                                        }
+                                    })
+                                    .tooltip(Tooltip::text(view::permission_description(
+                                        mode, harness,
+                                    )))
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .child(view::permission_label(mode, harness)),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.pick_permission(mode, cx)
+                                    }))
+                            }))
+                    })),
             )
-            .child(v_flex().p(px(CARD_INSET)).gap(px(MENU_GAP)).children(rows))
+            .into_any_element()
     }
 
     fn render_setting_row(&self, row: SettingRow, height: f32, cx: &Context<Self>) -> AnyElement {
@@ -1254,7 +1229,9 @@ impl ModelPicker {
                     this.hover(|style| style.bg(ink(0.05, cx)))
                 }
             })
-            .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+            .when_some(tooltip, |this, tooltip| {
+                this.tooltip(Tooltip::text(tooltip))
+            })
             .child(brand_glyph(kind, 14., colors.text_muted))
             .child(
                 div()
@@ -1266,9 +1243,9 @@ impl ModelPicker {
                     .child(model.label.clone()),
             )
             .child(star)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.pick_model(model.clone(), window, cx)
-            }));
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.pick_model(model.clone(), window, cx)),
+            );
         div().pb(px(MENU_GAP)).child(row).into_any_element()
     }
 
@@ -1284,14 +1261,7 @@ impl ModelPicker {
         let colors = cx.theme().colors();
         let warning = cx.theme().status().warning;
         let star = self
-            .render_star(
-                kind,
-                &model.id,
-                is_favorite,
-                22.,
-                MENU_ITEM_RADIUS,
-                cx,
-            )
+            .render_star(kind, &model.id, is_favorite, 22., MENU_ITEM_RADIUS, cx)
             .child(glyph(
                 if is_favorite {
                     IconName::AgentStarFilled
@@ -1351,12 +1321,14 @@ impl ModelPicker {
                     this.hover(|style| style.bg(ink(0.05, cx)))
                 }
             })
-            .when_some(tooltip, |this, tooltip| this.tooltip(Tooltip::text(tooltip)))
+            .when_some(tooltip, |this, tooltip| {
+                this.tooltip(Tooltip::text(tooltip))
+            })
             .child(body)
             .child(star)
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.pick_model(model.clone(), window, cx)
-            }));
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.pick_model(model.clone(), window, cx)),
+            );
         div().pb(px(MENU_GAP)).child(row).into_any_element()
     }
 
@@ -1453,7 +1425,9 @@ impl ModelPicker {
             .items_center()
             .justify_center()
             .cursor_pointer()
-            .when(!is_viewed, |this| this.hover(|style| style.bg(ink(0.06, cx))))
+            .when(!is_viewed, |this| {
+                this.hover(|style| style.bg(ink(0.06, cx)))
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.tab = tab;
                 cx.notify();
@@ -1486,7 +1460,13 @@ impl ModelPicker {
         let prefs = self.store.read(cx).list_prefs().clone();
         let selected_id = selection.model.as_ref().map(|model| model.id.clone());
         let favorites_only = self.tab == ModelTab::Favorites;
-        let viewed_color = |viewed: bool| if viewed { colors.text } else { colors.text_muted };
+        let viewed_color = |viewed: bool| {
+            if viewed {
+                colors.text
+            } else {
+                colors.text_muted
+            }
+        };
         let tabs = h_flex()
             .flex_none()
             .h(px(LIST_HEADER_HEIGHT))
@@ -1556,7 +1536,11 @@ impl ModelPicker {
                 )
                 .child(self.render_slider(&ladder, selected_index, selection.fast_on(), cx))
         });
-        let tray_height = full_tray_height(settings_rows.len() + 1, slider.is_some());
+        let tray_height = full_tray_height(
+            settings_rows.len(),
+            slider.is_some(),
+            permission_row_height(kind, FULL_SETTING_HEIGHT),
+        );
         let permission_row = self.render_permission_row(kind, permission, FULL_SETTING_HEIGHT, cx);
         v_flex()
             .child(tabs)
@@ -1605,7 +1589,8 @@ impl Render for ModelPicker {
             .read(cx)
             .picker_models(kind, settings.model.as_deref());
         let selection = Selection::resolve(&models, &settings);
-        let full = AgentChatSettings::get_global(cx).model_picker == AgentChatModelPickerLayout::Full;
+        let full =
+            AgentChatSettings::get_global(cx).model_picker == AgentChatModelPickerLayout::Full;
         let card = popover_card(cx)
             .key_context("menu")
             .track_focus(&self.focus_handle)
@@ -1613,19 +1598,17 @@ impl Render for ModelPicker {
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))
             .p(px(0.));
         let permission = settings.permission.for_harness(kind.harness_id());
-        if self.page == Page::Permissions {
-            return card
-                .w(px(if full { FULL_WIDTH } else { COMPACT_WIDTH }))
-                .child(self.render_permissions(kind, permission, cx))
-                .into_any_element();
-        }
         if full {
-            let settings_rows: Vec<SettingRow> = selection
-                .option_rows(|option| EFFORT_OPTION_IDS.contains(&option.id.as_str()));
+            let settings_rows: Vec<SettingRow> =
+                selection.option_rows(|option| EFFORT_OPTION_IDS.contains(&option.id.as_str()));
             let has_slider = !selection.ladder().is_empty();
             let height = FULL_CHROME_HEIGHT
                 + FULL_LIST_HEIGHT
-                + full_tray_height(settings_rows.len() + 1, has_slider);
+                + full_tray_height(
+                    settings_rows.len(),
+                    has_slider,
+                    permission_row_height(kind, FULL_SETTING_HEIGHT),
+                );
             return card
                 .w(px(FULL_WIDTH))
                 .h(px(height))
@@ -1634,12 +1617,8 @@ impl Render for ModelPicker {
         }
         card.w(px(COMPACT_WIDTH))
             .map(|this| match self.page {
-                Page::Settings => {
-                    this.child(self.render_settings(kind, &selection, &settings, cx))
-                }
-                Page::Models | Page::Permissions => {
-                    this.child(self.render_models(kind, &models, &selection, cx))
-                }
+                Page::Settings => this.child(self.render_settings(kind, &selection, &settings, cx)),
+                Page::Models => this.child(self.render_models(kind, &models, &selection, cx)),
             })
             .into_any_element()
     }
@@ -1715,7 +1694,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn picking_a_permission_mode_saves_it_and_returns(cx: &mut gpui::TestAppContext) {
+    async fn picking_a_permission_mode_saves_it_inline(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             workspace::AppState::test(cx);
             editor::init(cx);
@@ -1728,14 +1707,12 @@ mod tests {
         let (picker, cx) = cx.add_window_view(|window, cx| {
             ModelPicker::new(session.clone(), store.clone(), window, cx)
         });
-        picker.update(cx, |picker, cx| picker.show_permissions(cx));
-        cx.run_until_parked();
-        picker.update_in(cx, |picker, window, cx| {
-            picker.pick_permission(PermissionMode::FullAccess, window, cx)
+        picker.update(cx, |picker, cx| {
+            picker.pick_permission(PermissionMode::Ask, cx)
         });
         assert_eq!(
             session.read_with(cx, |session, _| session.settings().permission),
-            PermissionMode::FullAccess
+            PermissionMode::Ask
         );
         assert!(picker.read_with(cx, |picker, _| picker.page == Page::Settings));
     }
@@ -1749,9 +1726,9 @@ mod tests {
 
     #[test]
     fn full_tray_grows_with_settings_then_caps() {
-        assert_eq!(full_tray_height(0, false), 0.);
-        assert_eq!(full_tray_height(2, false), 71.);
-        assert_eq!(full_tray_height(1, true), 32. + 24. + 36. + 2. + 7.);
-        assert_eq!(full_tray_height(12, true), FULL_TRAY_MAX_HEIGHT);
+        assert_eq!(full_tray_height(0, false, 0.), 0.);
+        assert_eq!(full_tray_height(2, false, 0.), 71.);
+        assert_eq!(full_tray_height(1, true, 0.), 32. + 24. + 36. + 2. + 7.);
+        assert_eq!(full_tray_height(12, true, 0.), FULL_TRAY_MAX_HEIGHT);
     }
 }

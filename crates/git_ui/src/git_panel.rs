@@ -8736,7 +8736,6 @@ impl GitPanel {
                 div()
                     .id(checkbox_wrapper_id)
                     .flex_none()
-                    .occlude()
                     .when(!selected, |this| this.visible_on_hover(row_group.clone()))
                     .child(
                         h_flex()
@@ -8968,7 +8967,6 @@ impl GitPanel {
                 div()
                     .id(checkbox_wrapper_id)
                     .flex_none()
-                    .occlude()
                     .when(!selected, |this| this.visible_on_hover(row_group.clone()))
                     .child(
                         IconButton::new(checkbox_id, stage_button_icon(will_stage))
