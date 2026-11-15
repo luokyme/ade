@@ -286,13 +286,11 @@ impl Render for TitleBar {
 
         self.platform_titlebar.update(cx, |this, _| {
             this.set_button_layout(button_layout);
+            this.set_centered_child(center.into_any_element());
             this.set_children([h_flex()
                 .w_full()
                 .h_full()
-                // Both side groups grow equally, so the project entry in the middle
-                // stays centered in the title bar no matter how wide the sides are.
                 .child(h_flex().flex_1().min_w_0().child(left))
-                .child(center)
                 .child(h_flex().flex_1().min_w_0().justify_end().child(right))
                 .into_any_element()]);
         });
@@ -644,7 +642,6 @@ impl TitleBar {
         let mut hidden_count = 0;
         let mut tabs = h_flex()
             .p_0p5()
-            .mr_1()
             .gap_1()
             .rounded_md()
             .bg(box_background);

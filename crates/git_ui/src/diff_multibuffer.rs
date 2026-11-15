@@ -27,7 +27,7 @@ use project::{
         diff_buffer_list::{self, BranchDiffEvent, DiffBase},
     },
 };
-use settings::{GitPanelGroupBy, GitPanelSortBy, Settings, SettingsStore};
+use settings::{GitPanelSortBy, Settings, SettingsStore};
 use std::{collections::BTreeMap, sync::Arc};
 use theme::ActiveTheme;
 use ui::{CommonAnimationExt as _, KeyBinding, prelude::*};
@@ -115,18 +115,15 @@ impl DiffMultibuffer {
         );
 
         let mut was_sort_by = GitPanelSettings::get_global(cx).sort_by;
-        let mut was_group_by = GitPanelSettings::get_global(cx).group_by;
         let mut was_tree_view = GitPanelSettings::get_global(cx).tree_view;
         let mut was_collapse_untracked_diff =
             GitPanelSettings::get_global(cx).collapse_untracked_diff;
         cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
             let settings = GitPanelSettings::get_global(cx);
             let sort_by = settings.sort_by;
-            let group_by = settings.group_by;
             let tree_view = settings.tree_view;
             let is_collapse_untracked_diff = settings.collapse_untracked_diff;
             if sort_by != was_sort_by
-                || group_by != was_group_by
                 || tree_view != was_tree_view
                 || is_collapse_untracked_diff != was_collapse_untracked_diff
             {
@@ -138,7 +135,6 @@ impl DiffMultibuffer {
                 }
             }
             was_sort_by = sort_by;
-            was_group_by = group_by;
             was_tree_view = tree_view;
             was_collapse_untracked_diff = is_collapse_untracked_diff;
         })
@@ -961,9 +957,10 @@ const NEW_SORT_PREFIX: u64 = 3;
 /// to order excerpts and to identify which excerpts belong to a given buffer, so
 /// a key that shifted as files were added or removed would break that identity.
 ///
-/// Status grouping is encoded in the `sort_prefix`, and the within-group order
-/// is encoded in the (possibly synthetic) path so that `PathKey`'s natural
-/// ordering reproduces the git panel's order. The path here is only ever used
+/// Conflicted, tracked and new files are ordered in that sequence via the
+/// `sort_prefix`, and the within-group order is encoded in the (possibly
+/// synthetic) path so that `PathKey`'s natural ordering reproduces the git
+/// panel's order. The path here is only ever used
 /// for sorting and multibuffer identity; the path shown in the UI comes from the
 /// buffer's own `File`.
 pub(crate) fn project_diff_path_key(
@@ -973,9 +970,7 @@ pub(crate) fn project_diff_path_key(
     cx: &App,
 ) -> PathKey {
     let settings = GitPanelSettings::get_global(cx);
-    let sort_prefix = if settings.group_by != GitPanelGroupBy::Status {
-        TRACKED_SORT_PREFIX
-    } else if repo.had_conflict_on_last_merge_head_change(repo_path) {
+    let sort_prefix = if repo.had_conflict_on_last_merge_head_change(repo_path) {
         CONFLICT_SORT_PREFIX
     } else if status.is_created() {
         NEW_SORT_PREFIX

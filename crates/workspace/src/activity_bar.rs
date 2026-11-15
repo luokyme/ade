@@ -13,7 +13,7 @@ use ui::{
 };
 use util::ResultExt as _;
 
-const DEFAULT_ICON_SIZE: Rems = rems(1.25);
+const DEFAULT_ICON_SIZE: Rems = rems(1.125);
 
 fn on_right(cx: &App) -> bool {
     ActivityBarSettings::get_global(cx).position == ActivityBarPosition::Right

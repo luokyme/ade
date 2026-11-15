@@ -637,11 +637,6 @@ pub struct GitPanelSettingsContent {
     /// Default: path
     pub sort_by: Option<GitPanelSortBy>,
 
-    /// How to group entries in the git panel.
-    ///
-    /// Default: status
-    pub group_by: Option<GitPanelGroupBy>,
-
     /// Whether to collapse untracked files in the diff panel.
     ///
     /// Default: false
@@ -654,7 +649,7 @@ pub struct GitPanelSettingsContent {
 
     /// Whether to show the addition/deletion change count next to each file in the Git panel.
     ///
-    /// Default: true
+    /// Default: false
     pub diff_stats: Option<bool>,
 
     /// Whether to show a badge on the git panel icon with the count of uncommitted changes.
@@ -675,7 +670,7 @@ pub struct GitPanelSettingsContent {
 
     /// Default action when clicking a changed file in the Git panel.
     ///
-    /// Default: project_diff
+    /// Default: file_diff
     pub entry_primary_click_action: Option<GitPanelClickBehavior>,
 }
 
@@ -696,9 +691,9 @@ pub struct GitPanelSettingsContent {
 #[serde(rename_all = "snake_case")]
 pub enum GitPanelClickBehavior {
     /// Open the project diff, showing all changed files.
-    #[default]
     ProjectDiff,
     /// Open a single-file diff view.
+    #[default]
     FileDiff,
     /// Open the file in the editor without a diff view.
     ViewFile,
@@ -723,28 +718,6 @@ pub enum GitPanelSortBy {
     #[default]
     Path,
     Name,
-}
-
-#[derive(
-    Copy,
-    Clone,
-    Debug,
-    Default,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    MergeFrom,
-    PartialEq,
-    Eq,
-    strum::VariantArray,
-    strum::VariantNames,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum GitPanelGroupBy {
-    None,
-    #[default]
-    Status,
-    Staging,
 }
 
 #[derive(

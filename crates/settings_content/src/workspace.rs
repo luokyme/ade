@@ -581,7 +581,7 @@ pub struct ActivityBarSettingsContent {
     /// Default: left
     pub position: Option<ActivityBarPosition>,
     /// Size of the activity bar icons, in pixels. The bar grows or shrinks
-    /// to fit them. When unset, the icons are 1.25 times the UI font size.
+    /// to fit them. When unset, the icons are 1.125 times the UI font size.
     ///
     /// Default: unset
     pub icon_size: Option<crate::ActivityBarIconSize>,

@@ -3,7 +3,7 @@ use gpui::Pixels;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{
-    FolderIndicator, GitPanelClickBehavior, GitPanelGroupBy, GitPanelSortBy, IntoGpui,
+    FolderIndicator, GitPanelClickBehavior, GitPanelSortBy, IntoGpui,
     RegisterSetting, Settings, StatusStyle,
 };
 use ui::scrollbars::{ScrollbarVisibility, ShowScrollbar};
@@ -25,7 +25,6 @@ pub struct GitPanelSettings {
     pub scrollbar: ScrollbarSettings,
     pub fallback_branch_name: String,
     pub sort_by: GitPanelSortBy,
-    pub group_by: GitPanelGroupBy,
     pub collapse_untracked_diff: bool,
     pub tree_view: bool,
     pub diff_stats: bool,
@@ -74,7 +73,6 @@ impl Settings for GitPanelSettings {
             },
             fallback_branch_name: git_panel.fallback_branch_name.unwrap(),
             sort_by: git_panel.sort_by.unwrap(),
-            group_by: git_panel.group_by.unwrap(),
             collapse_untracked_diff: git_panel.collapse_untracked_diff.unwrap(),
             tree_view: git_panel.tree_view.unwrap(),
             diff_stats: git_panel.diff_stats.unwrap(),

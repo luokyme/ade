@@ -1093,10 +1093,6 @@
     //
     // Default: path
     "sort_by": "path",
-    // How to group entries in the git panel.
-    //
-    // Default: status
-    "group_by": "status",
     // Whether to collapse untracked files in the diff panel.
     //
     // Default: false
@@ -1122,8 +1118,8 @@
     },
     // Whether to show the addition/deletion change count next to each file in the Git panel.
     //
-    // Default: true
-    "diff_stats": true,
+    // Default: false
+    "diff_stats": false,
     // Maximum length of the commit message title before a warning is shown.
     // Set to 0 to disable.
     //
@@ -1132,8 +1128,8 @@
     // Default action when clicking a changed file in the Git panel.
     //
     // Choices: project_diff, file_diff, view_file
-    // Default: project_diff
-    "entry_primary_click_action": "project_diff",
+    // Default: file_diff
+    "entry_primary_click_action": "file_diff",
   },
   // Whether the screen sharing icon is shown in the os status bar.
   "show_call_status_icon": true,
@@ -1609,10 +1605,10 @@
     // Which side of the window the activity bar is on: "left" or "right".
     "position": "left",
     // Size of the activity bar icons, in pixels (12 to 48). The bar grows or
-    // shrinks to fit them. Leave it unset to make the icons 1.25 times the UI
+    // shrinks to fit them. Leave it unset to make the icons 1.125 times the UI
     // font size, so they follow it.
     //
-    // "icon_size": 20
+    // "icon_size": 18
   },
   // Status bar-related settings.
   "status_bar": {

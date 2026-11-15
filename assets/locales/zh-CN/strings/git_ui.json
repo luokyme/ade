@@ -30,6 +30,8 @@
   "Buffer Search": "缓冲区搜索",
   "Cancel": "取消",
   "Changes": "更改",
+  "Discard All Changes": "放弃所有更改",
+  "Merge Changes": "合并更改",
   "Changes since {base_ref}": "自 {base_ref} 以来的更改",
   "Choose Agent and Model": "选择智能体和模型",
   "Clipboard ↔ {location}": "剪贴板 ↔ {location}",

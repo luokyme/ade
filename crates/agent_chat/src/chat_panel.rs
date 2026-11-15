@@ -1,13 +1,13 @@
 use crate::{
     AgentChatSettings, AgentKind, MoveChatToPanel, MoveChatToTab, ToggleChatPanel,
-    agent_panel::{agent_chat_enabled, create_session, store_for},
+    agent_panel::{agent_chat_enabled, agent_logo, agent_tint, create_session, store_for},
     chat_view::ChatView,
     session::{AgentSession, AgentStore},
 };
 use anyhow::Result;
 use db::kvp::KeyValueStore;
 use gpui::{
-    Action, App, AsyncWindowContext, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
+    Action, App, AsyncWindowContext, ClickEvent, Context, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, Global, IntoElement, ParentElement, Pixels, Render, Styled, WeakEntity, Window, div,
     px,
 };
@@ -16,7 +16,7 @@ use project::Project;
 use serde::{Deserialize, Serialize};
 use settings::{DockSide, Settings as _};
 use std::sync::Arc;
-use ui::{ContextMenu, IconButton, IconName, PopoverMenu, Tooltip, prelude::*};
+use ui::{Icon, IconButton, IconName, Tooltip, prelude::*};
 use util::ResultExt as _;
 use workspace::{
     DraggedSelection, ItemHandle, Pane, PaneSearchBarCallbacks, Workspace, WorkspaceId,
@@ -250,30 +250,40 @@ impl SavedChats {
     }
 }
 
-fn new_chat_menu(workspace: WeakEntity<Workspace>) -> impl IntoElement {
-    PopoverMenu::new("chat-panel-new-chat")
-        .trigger_with_tooltip(
-            IconButton::new("chat-panel-new-chat-trigger", IconName::Plus)
-                .icon_size(IconSize::Small),
-            Tooltip::text(t!("New Chat")),
-        )
-        .anchor(gpui::Anchor::TopLeft)
-        .menu(move |window, cx| {
-            let workspace = workspace.clone();
-            let agents = AgentChatSettings::get_global(cx).agents().to_vec();
-            Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                agents.into_iter().fold(menu, |menu, kind| {
-                    let workspace = workspace.clone();
-                    menu.entry(kind.label(), None, move |window, cx| {
-                        workspace
-                            .update(cx, |workspace, cx| {
-                                new_chat_in_panel(workspace, kind, window, cx)
-                            })
-                            .log_err();
-                    })
+fn new_chat_buttons(workspace: WeakEntity<Workspace>, cx: &App) -> impl IntoElement {
+    let agents = AgentChatSettings::get_global(cx).agents().to_vec();
+    let start_chat = move |kind: AgentKind| {
+        let workspace = workspace.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+            workspace
+                .update(cx, |workspace, cx| {
+                    new_chat_in_panel(workspace, kind, window, cx)
                 })
+                .log_err();
+        }
+    };
+    match agents.as_slice() {
+        [kind] => IconButton::new("chat-panel-new-chat", IconName::Plus)
+            .icon_size(IconSize::Small)
+            .tooltip(Tooltip::text(t!("New {agent} chat", agent = kind.label())))
+            .on_click(start_chat(*kind))
+            .into_any_element(),
+        _ => h_flex()
+            .gap_0p5()
+            .child(
+                Icon::new(IconName::Plus)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .children(agents.into_iter().map(|kind| {
+                IconButton::new(("chat-panel-new-chat", kind as usize), agent_logo(kind))
+                    .icon_size(IconSize::Small)
+                    .icon_color(agent_tint(kind).map_or(Color::Default, Color::Custom))
+                    .tooltip(Tooltip::text(t!("New {agent} chat", agent = kind.label())))
+                    .on_click(start_chat(kind))
             }))
-        })
+            .into_any_element(),
+    }
 }
 
 fn tab_bar_buttons(workspace: WeakEntity<Workspace>) -> AnyElement {
@@ -388,7 +398,7 @@ impl ChatPanel {
             pane.set_zoom_out_on_close(false);
             pane.set_render_trailing_tab_button(cx, {
                 let workspace = workspace.clone();
-                move |_, _, _| Some(new_chat_menu(workspace.clone()).into_any_element())
+                move |_, _, cx| Some(new_chat_buttons(workspace.clone(), cx).into_any_element())
             });
             pane.set_render_tab_bar_buttons(cx, {
                 let workspace = workspace.clone();

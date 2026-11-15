@@ -26,7 +26,7 @@ use std::{
     time::Duration,
 };
 use time::OffsetDateTime;
-use ui::{Clickable, ContextMenu, IconName, PopoverMenu, Toggleable, Tooltip, prelude::*};
+use ui::{Clickable, ContextMenu, IconName, Toggleable, Tooltip, prelude::*};
 use util::ResultExt as _;
 use workspace::{
     SaveIntent, SplitDirection, Toast, Workspace,
@@ -514,46 +514,28 @@ impl AgentPanel {
         cx.notify();
     }
 
-    fn new_chat_menu(&self) -> impl IntoElement {
-        let workspace = self.workspace.clone();
-        PopoverMenu::new("agent-panel-new-chat")
-            .trigger(HeaderButton::new(
-                "agent-panel-new-chat-trigger",
-                IconName::Plus,
-                t!("New Chat"),
-            ))
-            .anchor(gpui::Anchor::TopRight)
-            .menu(move |window, cx| {
-                let workspace = workspace.clone();
-                let agents = AgentChatSettings::get_global(cx).agents().to_vec();
-                Some(ContextMenu::build(window, cx, move |menu, _, _| {
-                    let menu = agents.into_iter().fold(menu, |menu, kind| {
-                        let workspace = workspace.clone();
-                        menu.entry(
-                            kind.label(),
-                            Some(new_chat_action(kind)),
-                            move |window, cx| {
-                                workspace
-                                    .update(cx, |workspace, cx| {
-                                        new_chat(workspace, kind, window, cx)
-                                    })
-                                    .log_err();
-                            },
-                        )
-                    });
-                    menu.separator().entry(
-                        t!("Continue Saved Chat…"),
-                        Some(ContinueSavedChat.boxed_clone()),
-                        move |window, cx| {
-                            workspace
-                                .update(cx, |workspace, cx| {
-                                    crate::saved_chats::toggle(workspace, window, cx)
-                                })
-                                .log_err();
-                        },
-                    )
-                }))
+    fn new_chat_buttons(&self, cx: &App) -> impl IntoElement {
+        let agents = AgentChatSettings::get_global(cx).agents();
+        let only_one = agents.len() == 1;
+        let buttons = agents.iter().map(|kind| {
+            let kind = *kind;
+            let workspace = self.workspace.clone();
+            HeaderButton::new(
+                ("agent-panel-new-chat", kind as usize),
+                if only_one {
+                    IconName::Plus
+                } else {
+                    agent_logo(kind)
+                },
+                t!("New {agent} chat", agent = kind.label()),
+            )
+            .on_click(move |_, window, cx| {
+                workspace
+                    .update(cx, |workspace, cx| new_chat(workspace, kind, window, cx))
+                    .log_err();
             })
+        });
+        h_flex().gap(px(4.)).children(buttons)
     }
 
     fn toggle_saved_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -575,10 +557,10 @@ impl AgentPanel {
             .flex_none()
             .child(
                 h_flex()
+                    .h(ui::Tab::container_height(cx))
                     .gap(px(4.))
                     .px(px(SPACE_SM))
-                    .pt(px(8.))
-                    .pb(px(4.))
+                    .mb(px(4.))
                     .child(
                         h_flex()
                             .flex_1()
@@ -616,7 +598,24 @@ impl AgentPanel {
                             }),
                         ),
                     )
-                    .child(self.new_chat_menu()),
+                    .child(
+                        HeaderButton::new(
+                            "agent-panel-continue-saved-chat",
+                            IconName::HistoryRerun,
+                            t!("Continue Saved Chat…"),
+                        )
+                        .on_click({
+                            let workspace = self.workspace.clone();
+                            move |_, window, cx| {
+                                workspace
+                                    .update(cx, |workspace, cx| {
+                                        crate::saved_chats::toggle(workspace, window, cx)
+                                    })
+                                    .log_err();
+                            }
+                        }),
+                    )
+                    .child(self.new_chat_buttons(cx)),
             )
             .child(
                 div().px(px(SPACE_SM)).pb(px(4.)).child(
@@ -1145,7 +1144,9 @@ impl AgentPanel {
                 follows_group,
             ),
         };
-        let header = self.section_header(key.clone(), label, collapsed, cx);
+        // The panel title already says "Chats", so a lone Chats group needs no header.
+        let header = (!matches!(group.kind, GroupKind::Chats) || follows_group)
+            .then(|| self.section_header(key.clone(), label, collapsed, cx));
         let body: Vec<AnyElement> = group
             .rows
             .iter()
@@ -1165,7 +1166,7 @@ impl AgentPanel {
             .id(SharedString::from(format!("{key}-section")))
             .w_full()
             .rounded(px(8.))
-            .child(header)
+            .children(header)
             .when(!body.is_empty(), |this| {
                 this.child(
                     v_flex()
@@ -1308,7 +1309,9 @@ fn layout_list<'a>(
             ));
         }
     } else if !rest.is_empty() {
-        active.push(group(GroupKind::Chats, &rest, is_collapsed(CHATS_KEY)));
+        // A lone Chats group renders without a header, so it can't be expanded again.
+        let collapsed = !active.is_empty() && is_collapsed(CHATS_KEY);
+        active.push(group(GroupKind::Chats, &rest, collapsed));
     }
     ListLayout { active }
 }
@@ -1336,7 +1339,7 @@ fn disclosure_chevron(open: bool, color: Hsla) -> impl IntoElement {
     )
 }
 
-fn agent_logo(kind: AgentKind) -> IconName {
+pub(crate) fn agent_logo(kind: AgentKind) -> IconName {
     match kind {
         AgentKind::Claude => IconName::AgentClaude,
         AgentKind::Codex => IconName::AgentCodex,
@@ -1344,7 +1347,7 @@ fn agent_logo(kind: AgentKind) -> IconName {
     }
 }
 
-fn agent_tint(kind: AgentKind) -> Option<Hsla> {
+pub(crate) fn agent_tint(kind: AgentKind) -> Option<Hsla> {
     match kind {
         AgentKind::Claude => Some(rgb(CLAUDE_BRAND).into()),
         AgentKind::Codex | AgentKind::Opencode => None,
@@ -1723,14 +1726,6 @@ fn project_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-pub(crate) fn new_chat_action(kind: AgentKind) -> Box<dyn Action> {
-    match kind {
-        AgentKind::Claude => Box::new(NewClaudeChat),
-        AgentKind::Codex => Box::new(NewCodexChat),
-        AgentKind::Opencode => Box::new(NewOpencodeChat),
-    }
-}
-
 impl EventEmitter<PanelEvent> for AgentPanel {}
 
 impl Focusable for AgentPanel {
@@ -1962,7 +1957,36 @@ mod tests {
             unseen: true,
             ..session("unseen", "/a")
         };
-        let sessions = vec![working, session("idle", "/a"), waiting, unseen];
+        let pinned = SessionSummary {
+            pinned: true,
+            ..session("pinned", "/a")
+        };
+        let sessions = vec![pinned, working, session("idle", "/a"), waiting, unseen];
+        let prefs = ChatListPrefs {
+            collapsed_sections: vec![CHATS_KEY.to_string()],
+            ..ChatListPrefs::default()
+        };
+
+        let layout = layout_list(&sessions, &prefs, false);
+        let [_, chats] = layout.active.as_slice() else {
+            panic!("expected the Pinned and Chats groups");
+        };
+        assert_eq!(chats.kind, GroupKind::Chats);
+        assert!(chats.collapsed);
+        assert_eq!(chats.total, 4);
+        assert_eq!(row_ids(chats), ["working", "waiting", "unseen"]);
+
+        let layout = layout_list(&sessions, &prefs, true);
+        let [_, chats] = layout.active.as_slice() else {
+            panic!("expected the Pinned and Chats groups");
+        };
+        assert!(!chats.collapsed);
+        assert_eq!(row_ids(chats), ["working", "idle", "waiting", "unseen"]);
+    }
+
+    #[test]
+    fn lone_chats_group_ignores_collapsed_preference() {
+        let sessions = vec![session("idle", "/a")];
         let prefs = ChatListPrefs {
             collapsed_sections: vec![CHATS_KEY.to_string()],
             ..ChatListPrefs::default()
@@ -1972,17 +1996,8 @@ mod tests {
         let [chats] = layout.active.as_slice() else {
             panic!("expected only the Chats group");
         };
-        assert_eq!(chats.kind, GroupKind::Chats);
-        assert!(chats.collapsed);
-        assert_eq!(chats.total, 4);
-        assert_eq!(row_ids(chats), ["working", "waiting", "unseen"]);
-
-        let layout = layout_list(&sessions, &prefs, true);
-        let [chats] = layout.active.as_slice() else {
-            panic!("expected only the Chats group");
-        };
         assert!(!chats.collapsed);
-        assert_eq!(row_ids(chats), ["working", "idle", "waiting", "unseen"]);
+        assert_eq!(row_ids(chats), ["idle"]);
     }
 
     #[test]

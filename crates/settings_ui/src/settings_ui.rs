@@ -599,7 +599,6 @@ fn init_renderers(cx: &mut App) {
         .add_dropdown_renderer::<settings::StatusStyle>()
         .add_dropdown_renderer::<settings::GitPanelClickBehavior>()
         .add_dropdown_renderer::<settings::GitPanelSortBy>()
-        .add_dropdown_renderer::<settings::GitPanelGroupBy>()
         .add_dropdown_renderer::<settings::EncodingDisplayOptions>()
         .add_dropdown_renderer::<settings::PaneSplitDirectionHorizontal>()
         .add_dropdown_renderer::<settings::PaneSplitDirectionVertical>()

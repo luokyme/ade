@@ -952,7 +952,7 @@ mod tests {
     use multi_buffer::PathKey;
     use project::{FakeFs, git_store::MAX_CONCURRENT_BLOB_READS};
     use serde_json::json;
-    use settings::{DiffViewStyle, GitPanelGroupBy, GitPanelSortBy, SettingsStore};
+    use settings::{DiffViewStyle, GitPanelSortBy, SettingsStore};
     use std::path::Path;
     use unindent::Unindent as _;
     use util::{path, rel_path::rel_path};
@@ -2168,7 +2168,6 @@ mod tests {
                 store.update_user_settings(cx, |settings| {
                     let git_panel = settings.git_panel.get_or_insert_default();
                     git_panel.sort_by = Some(GitPanelSortBy::Name);
-                    git_panel.group_by = Some(GitPanelGroupBy::None);
                 });
             });
         });
@@ -2220,7 +2219,6 @@ mod tests {
                 store.update_user_settings(cx, |settings| {
                     let git_panel = settings.git_panel.get_or_insert_default();
                     git_panel.tree_view = Some(true);
-                    git_panel.group_by = Some(GitPanelGroupBy::None);
                 });
             });
         });

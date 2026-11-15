@@ -27,6 +27,7 @@ pub struct PlatformTitleBar {
     id: ElementId,
     platform_style: PlatformStyle,
     children: SmallVec<[AnyElement; 2]>,
+    centered_child: Option<AnyElement>,
     should_move: bool,
     system_window_tabs: Entity<SystemWindowTabs>,
     button_layout: Option<WindowButtonLayout>,
@@ -42,6 +43,7 @@ impl PlatformTitleBar {
             id: id.into(),
             platform_style,
             children: SmallVec::new(),
+            centered_child: None,
             should_move: false,
             system_window_tabs,
             button_layout: None,
@@ -79,6 +81,10 @@ impl PlatformTitleBar {
 
     pub fn set_button_layout(&mut self, button_layout: Option<WindowButtonLayout>) {
         self.button_layout = button_layout;
+    }
+
+    pub fn set_centered_child(&mut self, child: AnyElement) {
+        self.centered_child = Some(child);
     }
 
     fn effective_button_layout(
@@ -174,6 +180,7 @@ impl Render for PlatformTitleBar {
         let titlebar_color = self.title_bar_color(window, cx);
         let close_action = Box::new(workspace::CloseWindow);
         let children = mem::take(&mut self.children);
+        let centered_child = self.centered_child.take();
 
         let button_layout = self.effective_button_layout(&decorations, cx);
 
@@ -306,7 +313,11 @@ impl Render for PlatformTitleBar {
                         title_bar
                     }
                 },
-            );
+            )
+            .when_some(centered_child, |title_bar, child| {
+                // Window controls and platform padding must not shift the window's center.
+                title_bar.child(h_flex().absolute().inset_0().justify_center().child(child))
+            });
 
         v_flex()
             .w_full()

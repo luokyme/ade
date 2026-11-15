@@ -468,6 +468,33 @@ pub fn git_status_icon(status: FileStatus) -> impl IntoElement {
     GitStatusIcon::new(status)
 }
 
+/// A single-letter badge for a file's Git status: `C` conflicted, `D` deleted,
+/// `U` untracked, `A` added, `R` renamed or copied, `T` type changed, `M` modified.
+pub fn git_status_letter(status: FileStatus, cx: &App) -> impl IntoElement {
+    let colors = cx.theme().colors();
+    let (letter, color) = match status {
+        FileStatus::Unmerged(_) => ("C", colors.version_control_conflict),
+        FileStatus::Untracked => ("U", colors.version_control_added),
+        FileStatus::Ignored => ("I", colors.version_control_ignored),
+        FileStatus::Tracked(_) if status.is_deleted() => ("D", colors.version_control_deleted),
+        FileStatus::Tracked(_) if status.is_created() => ("A", colors.version_control_added),
+        FileStatus::Tracked(tracked) => {
+            let codes = [tracked.worktree_status, tracked.index_status];
+            if codes.contains(&StatusCode::Renamed) || codes.contains(&StatusCode::Copied) {
+                ("R", colors.version_control_renamed)
+            } else if codes.contains(&StatusCode::TypeChanged) {
+                ("T", colors.version_control_modified)
+            } else {
+                ("M", colors.version_control_modified)
+            }
+        }
+    };
+
+    Label::new(letter)
+        .size(LabelSize::Small)
+        .color(Color::Custom(color))
+}
+
 struct RenameBranchModal {
     current_branch: SharedString,
     editor: Entity<Editor>,
@@ -1251,7 +1278,9 @@ impl RenderOnce for GitStatusIcon {
             )
         };
 
-        Icon::new(icon_name).color(Color::Custom(color))
+        Icon::new(icon_name)
+            .size(IconSize::Small)
+            .color(Color::Custom(color))
     }
 }
 

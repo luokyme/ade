@@ -19,9 +19,32 @@ export RELEASE_VERSION
 RELEASE_VERSION=$(script/get-crate-version ade)
 export CC=${CC:-clang}
 
-echo "Building the editor and CLI for local installation..."
-cargo rustc --release --package ade --bin ade -- -C linker="$CC" -C link-arg=-fuse-ld=lld
-cargo build --release --package cli --bin cli
+# Use every core by default; the lower scheduling priority below keeps the
+# desktop responsive.
+if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
+  build_jobs="$CARGO_BUILD_JOBS"
+else
+  build_jobs=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
+fi
+
+# Release profiles disable incremental compilation by default, which makes every
+# local reinstall recompile whole crates. Local installs rebuild often, so opt in.
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-1}"
+
+# Run the build at a lower scheduling priority so the desktop stays responsive
+# while rustc and the linker saturate the CPU.
+build_nice="${ADE_BUILD_NICE:-10}"
+run_build() {
+  if command -v nice >/dev/null 2>&1; then
+    nice -n "$build_nice" "$@"
+  else
+    "$@"
+  fi
+}
+
+echo "Building the editor and CLI for local installation (jobs: $build_jobs, nice: $build_nice)..."
+run_build cargo rustc --release --package ade --bin ade --jobs "$build_jobs" -- -C linker="$CC" -C link-arg=-fuse-ld=lld
+run_build cargo build --release --package cli --bin cli --jobs "$build_jobs"
 
 binary_dir="${CARGO_TARGET_DIR:-target}/release"
 if [[ -n "${CARGO_BUILD_TARGET:-}" ]]; then
