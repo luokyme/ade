@@ -189,17 +189,21 @@ pub async fn delete_recent_project(workspace_id: WorkspaceId, db: &WorkspaceDb) 
     let _ = db.delete_workspace_by_id(workspace_id).await;
 }
 
-fn activity_color(activity: AgentActivity) -> Color {
+pub fn activity_color(activity: AgentActivity) -> Color {
     match activity {
         AgentActivity::Working => Color::Accent,
+        AgentActivity::Completed => Color::Success,
         AgentActivity::NeedsInput => Color::Warning,
+        AgentActivity::Failed => Color::Error,
     }
 }
 
-fn activity_label(activity: AgentActivity) -> SharedString {
+pub fn activity_label(activity: AgentActivity) -> SharedString {
     match activity {
         AgentActivity::Working => t!("Agent working"),
+        AgentActivity::Completed => t!("Agent finished"),
         AgentActivity::NeedsInput => t!("Agent needs you"),
+        AgentActivity::Failed => t!("Agent failed"),
     }
 }
 

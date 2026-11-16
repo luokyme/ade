@@ -3,7 +3,7 @@ use crate::{
     ToggleFocus,
     chat_style::{accent, ink, selected_row, text_faint, ui, wash},
     chat_view::ChatView,
-    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, SessionSummary},
+    session::{AgentSession, AgentStore, ChatListPrefs, ChatOutcome, ChatSort, SessionSummary},
 };
 use anyhow::Result;
 use collections::HashSet;
@@ -49,6 +49,8 @@ const HARNESS_ICON_SIZE: f32 = 13.0;
 const COMPACT_TIME_WIDTH: f32 = 30.0;
 const LABEL_FADE_BAND: f32 = 20.0;
 const LIST_FADE_BAND: f32 = 24.0;
+const OLDER_DIVIDER_MARGIN: f32 = 4.0;
+const OLDER_THAN_SECONDS: i64 = 24 * 60 * 60;
 const CLAUDE_BRAND: u32 = 0xD97757;
 const SPINNER_PERIOD: Duration = Duration::from_millis(750);
 const SPINNER_DIM: f32 = 0.1;
@@ -230,6 +232,7 @@ pub struct AgentPanel {
     hovered_row: Option<SharedString>,
     list_scroll: ScrollHandle,
     showing_saved: bool,
+    show_archived: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -278,6 +281,7 @@ impl AgentPanel {
                     hovered_row: None,
                     list_scroll: ScrollHandle::new(),
                     showing_saved: false,
+                    show_archived: false,
                 }
             })
         })
@@ -432,6 +436,7 @@ impl AgentPanel {
         let id: SharedString = session.id.clone().into();
         let title = session.title.clone();
         let pinned = session.pinned;
+        let archived = session.archived;
         let native_id = session.native_session_id.clone();
         let panel = cx.entity().downgrade();
         let menu = ContextMenu::build(window, cx, move |menu, _, _| {
@@ -451,22 +456,24 @@ impl AgentPanel {
             } else {
                 tc!("chat", "Pin")
             };
-            let menu = menu
-                .entry(t!("Rename"), None, {
-                    let (id, title) = (id.clone(), title.clone());
-                    action(
-                        &panel,
-                        Box::new(move |panel, window, cx| {
-                            panel.start_rename(
-                                Renaming::Chat(id.clone()),
-                                title.to_string(),
-                                window,
-                                cx,
-                            )
-                        }),
-                    )
-                })
-                .entry(pin_label, None, {
+            let menu = menu.entry(t!("Rename"), None, {
+                let (id, title) = (id.clone(), title.clone());
+                action(
+                    &panel,
+                    Box::new(move |panel, window, cx| {
+                        panel.start_rename(
+                            Renaming::Chat(id.clone()),
+                            title.to_string(),
+                            window,
+                            cx,
+                        )
+                    }),
+                )
+            });
+            let menu = if archived {
+                menu
+            } else {
+                menu.entry(pin_label, None, {
                     let id = id.clone();
                     action(
                         &panel,
@@ -477,29 +484,50 @@ impl AgentPanel {
                         }),
                     )
                 })
-                .separator()
-                .entry(t!("Fork Chat"), None, {
-                    let id = id.clone();
-                    action(
-                        &panel,
-                        Box::new(move |panel, window, cx| panel.fork(id.clone(), window, cx)),
-                    )
-                });
+            };
+            let menu = menu.separator().entry(t!("Fork Chat"), None, {
+                let id = id.clone();
+                action(
+                    &panel,
+                    Box::new(move |panel, window, cx| panel.fork(id.clone(), window, cx)),
+                )
+            });
             let menu = match native_id.clone() {
                 Some(native_id) => menu.entry(t!("Copy Agent Session ID"), None, move |_, cx| {
                     cx.write_to_clipboard(ClipboardItem::new_string(native_id.clone()))
                 }),
                 None => menu,
             };
-            menu.separator().entry(t!("Delete…"), None, {
-                let (id, title) = (id.clone(), title.clone());
+            let archive_label = if archived {
+                t!("Unarchive")
+            } else {
+                t!("Archive")
+            };
+            let menu = menu.separator().entry(archive_label, None, {
+                let id = id.clone();
                 action(
                     &panel,
-                    Box::new(move |panel, window, cx| {
-                        panel.confirm_delete(id.clone(), title.clone(), window, cx)
+                    Box::new(move |panel, _, cx| {
+                        panel
+                            .store
+                            .update(cx, |store, cx| store.set_archived(&id, !archived, cx))
                     }),
                 )
-            })
+            });
+            // Deleting is only offered for archived chats, so nothing is lost in one step.
+            if archived {
+                menu.entry(t!("Delete…"), None, {
+                    let (id, title) = (id.clone(), title.clone());
+                    action(
+                        &panel,
+                        Box::new(move |panel, window, cx| {
+                            panel.confirm_delete(id.clone(), title.clone(), window, cx)
+                        }),
+                    )
+                })
+            } else {
+                menu
+            }
         });
         let dismiss = cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, _, cx| {
             this.row_menu = None;
@@ -757,7 +785,7 @@ impl AgentPanel {
     ) -> AnyElement {
         let colors = cx.theme().colors();
         let text_muted = colors.text_muted;
-        let (key, icon, text, show_label, icon_color) = match action {
+        let (key, icon, text, icon_color) = match action {
             RowAction::Pin { pinned } => (
                 "pin",
                 IconName::AgentPin,
@@ -766,8 +794,21 @@ impl AgentPanel {
                 } else {
                     tc!("chat", "Pin")
                 },
-                false,
                 if pinned { colors.text } else { text_muted },
+            ),
+            RowAction::Archive { archived } => (
+                "archive",
+                if archived {
+                    IconName::AgentUnarchive
+                } else {
+                    IconName::AgentArchive
+                },
+                if archived {
+                    t!("Unarchive")
+                } else {
+                    t!("Archive")
+                },
+                text_muted,
             ),
         };
         let rest = wash(0.10, cx);
@@ -796,20 +837,13 @@ impl AgentPanel {
                 if compact { HARNESS_ICON_SIZE } else { 11. },
                 icon_color,
             ))
-            .when(show_label, |this| {
-                this.child(
-                    div()
-                        .text_size(ui(10.))
-                        .text_color(text_muted)
-                        .child(text.clone()),
-                )
-            })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.hovered_row = None;
                 this.store.update(cx, |store, cx| match action {
                     RowAction::Pin { pinned } => store.set_pinned(&id, !pinned, cx),
+                    RowAction::Archive { archived } => store.set_archived(&id, !archived, cx),
                 });
             }))
             .tooltip(Tooltip::text(text))
@@ -831,6 +865,8 @@ impl AgentPanel {
         let subline = colors.text_muted.opacity(0.5);
         let time_color = colors.text_muted.opacity(0.8);
         let hovered = self.hovered_row.as_ref() == Some(&id);
+        let archived = session.archived;
+        let archived_muted = archived && !selected && !hovered;
         let status = RowStatus::of(&session);
         let status_color = status.color(cx);
         let time_ago: SharedString = format_time_ago(session.updated_at, now).into();
@@ -871,14 +907,17 @@ impl AgentPanel {
             h_flex()
                 .gap(px(4.))
                 .when(!compact, |this| this.mr(px(-4.)))
-                .child(self.row_action(
-                    &id,
-                    RowAction::Pin {
-                        pinned: session.pinned,
-                    },
-                    compact,
-                    cx,
-                ))
+                .when(!archived, |this| {
+                    this.child(self.row_action(
+                        &id,
+                        RowAction::Pin {
+                            pinned: session.pinned,
+                        },
+                        compact,
+                        cx,
+                    ))
+                })
+                .child(self.row_action(&id, RowAction::Archive { archived }, compact, cx))
                 .into_any_element()
         } else {
             match status.label() {
@@ -926,7 +965,13 @@ impl AgentPanel {
         } else {
             colors.element_hover
         };
-        let rest_text = if selected { text } else { text.opacity(0.8) };
+        let rest_text = if selected {
+            text
+        } else if archived {
+            text.opacity(0.55)
+        } else {
+            text.opacity(0.8)
+        };
         let row = div()
             .id(SharedString::from(format!("agent-session-row-{id}")))
             .h(px(row_height))
@@ -972,7 +1017,9 @@ impl AgentPanel {
                     .child(glyph(
                         harness_icon,
                         HARNESS_ICON_SIZE,
-                        harness_tint.map_or(colors.text_muted, |tint| tint.opacity(0.8)),
+                        harness_tint
+                            .map_or(colors.text_muted, |tint| tint.opacity(0.8))
+                            .opacity(if archived_muted { 0.5 } else { 1. }),
                     ))
                     .child(title_content)
                     .when(!compact || hovered, |this| this.children(corner.take()))
@@ -1047,6 +1094,11 @@ impl AgentPanel {
             .on_click(cx.listener({
                 let key = key.to_string();
                 move |this, _, _, cx| {
+                    if key == ARCHIVED_KEY {
+                        this.show_archived = !this.show_archived;
+                        cx.notify();
+                        return;
+                    }
                     let key = key.clone();
                     this.store.update(cx, |store, cx| {
                         store.update_list_prefs(
@@ -1095,25 +1147,38 @@ impl AgentPanel {
             .into_iter()
             .filter(|session| Self::matches_search(session, &query))
             .collect();
-        let layout = layout_list(&sessions, &prefs, searching);
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let layout = layout_list(
+            &sessions,
+            &prefs,
+            searching,
+            self.show_archived,
+            now - OLDER_THAN_SECONDS,
+        );
         let rendered_rows: HashSet<String> = layout
             .active
             .iter()
+            .chain(&layout.archived)
             .flat_map(|group| group.rows.iter().map(|row| row.session.id.clone()))
             .collect();
         let row_context = RowContext {
-            now: OffsetDateTime::now_utc().unix_timestamp(),
+            now,
             compact: prefs.compact_rows,
             active_id: self.active_chat_id(cx),
         };
+        let has_active = !layout.active.is_empty();
         let active = layout
             .active
             .into_iter()
             .enumerate()
             .map(|(index, group)| self.render_group(group, index > 0, &row_context, cx))
             .collect();
+        let archived = layout
+            .archived
+            .map(|group| self.render_group(group, has_active, &row_context, cx));
         ChatList {
             active,
+            archived,
             searching,
             rendered_rows,
         }
@@ -1143,25 +1208,37 @@ impl AgentPanel {
                 disclosure_label(&t!("Chats"), collapsed, group.total),
                 follows_group,
             ),
+            GroupKind::Archived => (
+                ARCHIVED_KEY.into(),
+                disclosure_label(&t!("Archived"), collapsed, group.total),
+                follows_group,
+            ),
         };
         // The panel title already says "Chats", so a lone Chats group needs no header.
         let header = (!matches!(group.kind, GroupKind::Chats) || follows_group)
             .then(|| self.section_header(key.clone(), label, collapsed, cx));
-        let body: Vec<AnyElement> = group
-            .rows
-            .iter()
-            .map(|row| {
-                let selected = row_context.active_id.as_deref() == Some(row.session.id.as_str());
-                self.render_session(
-                    row.session.clone(),
-                    row.nested,
-                    row_context.now,
-                    row_context.compact,
-                    selected,
-                    cx,
-                )
-            })
-            .collect();
+        let mut body: Vec<AnyElement> = Vec::with_capacity(group.rows.len() + 1);
+        for row in &group.rows {
+            if row.starts_older {
+                body.push(
+                    div()
+                        .mx(px(SPACE_SM))
+                        .my(px(OLDER_DIVIDER_MARGIN))
+                        .h(px(1.))
+                        .bg(ink(0.06, cx))
+                        .into_any_element(),
+                );
+            }
+            let selected = row_context.active_id.as_deref() == Some(row.session.id.as_str());
+            body.push(self.render_session(
+                row.session.clone(),
+                row.nested,
+                row_context.now,
+                row_context.compact,
+                selected,
+                cx,
+            ));
+        }
         let section = v_flex()
             .id(SharedString::from(format!("{key}-section")))
             .w_full()
@@ -1186,6 +1263,7 @@ impl AgentPanel {
 
 struct ChatList {
     active: Vec<AnyElement>,
+    archived: Option<AnyElement>,
     searching: bool,
     rendered_rows: HashSet<String>,
 }
@@ -1201,6 +1279,7 @@ enum GroupKind {
     Pinned,
     Project(PathBuf),
     Chats,
+    Archived,
 }
 
 struct ListGroup<'a> {
@@ -1213,10 +1292,13 @@ struct ListGroup<'a> {
 struct ListRow<'a> {
     session: &'a SessionSummary,
     nested: bool,
+    /// The first top-level row past the one-day cutoff, set off from the recent rows above it.
+    starts_older: bool,
 }
 
 struct ListLayout<'a> {
     active: Vec<ListGroup<'a>>,
+    archived: Option<ListGroup<'a>>,
 }
 
 fn needs_attention(session: &SessionSummary) -> bool {
@@ -1227,26 +1309,37 @@ fn layout_list<'a>(
     sessions: &'a [SessionSummary],
     prefs: &ChatListPrefs,
     searching: bool,
+    show_archived: bool,
+    older_than: i64,
 ) -> ListLayout<'a> {
+    let sort_time = |session: &SessionSummary| match prefs.sort {
+        ChatSort::Updated => session.updated_at,
+        ChatSort::Created => session.created_at,
+    };
     let is_collapsed = |key: &str| prefs.collapsed_sections.iter().any(|id| id == key);
     let children_of = |parent: &SessionSummary| -> Vec<&'a SessionSummary> {
         sessions
             .iter()
             .filter(|session| {
-                session.side_chat && session.parent_id.as_deref() == Some(parent.id.as_str())
+                session.side_chat
+                    && session.archived == parent.archived
+                    && session.parent_id.as_deref() == Some(parent.id.as_str())
             })
             .collect()
     };
     let is_top_level = |session: &SessionSummary| {
         !(session.side_chat
-            && session
-                .parent_id
-                .as_ref()
-                .is_some_and(|parent| sessions.iter().any(|other| other.id == *parent)))
+            && session.parent_id.as_ref().is_some_and(|parent| {
+                sessions
+                    .iter()
+                    .any(|other| other.id == *parent && other.archived == session.archived)
+            }))
     };
     let group = |kind: GroupKind, members: &[&'a SessionSummary], collapsed: bool| {
         let collapsed = collapsed && !searching;
         let mut rows = Vec::new();
+        let mut seen_recent = false;
+        let mut divided = false;
         for &session in members {
             let mut children = children_of(session);
             if collapsed {
@@ -1255,13 +1348,19 @@ fn layout_list<'a>(
                     continue;
                 }
             }
+            let older = sort_time(session) < older_than;
+            let starts_older = older && seen_recent && !divided;
+            divided |= starts_older;
+            seen_recent |= !older;
             rows.push(ListRow {
                 session,
                 nested: false,
+                starts_older,
             });
             rows.extend(children.into_iter().map(|session| ListRow {
                 session,
                 nested: true,
+                starts_older: false,
             }));
         }
         ListGroup {
@@ -1273,7 +1372,7 @@ fn layout_list<'a>(
     };
     let live: Vec<&SessionSummary> = sessions
         .iter()
-        .filter(|session| is_top_level(session))
+        .filter(|session| !session.archived && is_top_level(session))
         .collect();
     let mut active = Vec::new();
     let pinned: Vec<&SessionSummary> = live
@@ -1313,11 +1412,24 @@ fn layout_list<'a>(
         let collapsed = !active.is_empty() && is_collapsed(CHATS_KEY);
         active.push(group(GroupKind::Chats, &rest, collapsed));
     }
-    ListLayout { active }
+    let archived: Vec<&SessionSummary> = sessions
+        .iter()
+        .filter(|session| session.archived && is_top_level(session))
+        .collect();
+    let archived = (!archived.is_empty()).then(|| {
+        let mut archived = group(GroupKind::Archived, &archived, !show_archived);
+        // Archived chats stay out of sight while collapsed, even ones still marked unseen.
+        if archived.collapsed {
+            archived.rows.clear();
+        }
+        archived
+    });
+    ListLayout { active, archived }
 }
 
 const PINNED_KEY: &str = "agent-pinned";
 const CHATS_KEY: &str = "agent-chats";
+const ARCHIVED_KEY: &str = "agent-archived";
 
 fn project_key(project: &Path) -> String {
     format!("agent-project:{}", project.to_string_lossy())
@@ -1441,6 +1553,7 @@ impl RowStatus {
 #[derive(Clone, Copy)]
 enum RowAction {
     Pin { pinned: bool },
+    Archive { archived: bool },
 }
 
 fn glyph_rows(cx: &App) -> [Hsla; 3] {
@@ -1752,8 +1865,9 @@ impl Render for AgentPanel {
         let body: AnyElement = if self.showing_saved {
             self.render_saved_messages(cx)
         } else if has_any {
+            let only_archived_matches = list.searching && list.archived.is_some();
             let active: Option<AnyElement> = if list.active.is_empty() {
-                Some(
+                (!only_archived_matches).then(|| {
                     div()
                         .px(px(SPACE_SM))
                         .pb(px(SPACE_SM))
@@ -1764,8 +1878,8 @@ impl Render for AgentPanel {
                         } else {
                             t!("No chats yet")
                         })
-                        .into_any_element(),
-                )
+                        .into_any_element()
+                })
             } else {
                 Some(
                     v_flex()
@@ -1784,7 +1898,8 @@ impl Render for AgentPanel {
                     .track_scroll(&self.list_scroll)
                     .px(px(SPACE_SM))
                     .pt(px(LIST_PAD_TOP))
-                    .children(active),
+                    .children(active)
+                    .children(list.archived),
             )
             .into_any_element()
         } else {
@@ -1925,6 +2040,7 @@ mod tests {
             working: false,
             needs_input: false,
             pinned: false,
+            archived: false,
             parent_id: None,
             side_chat: false,
             outcome: None,
@@ -1967,7 +2083,7 @@ mod tests {
             ..ChatListPrefs::default()
         };
 
-        let layout = layout_list(&sessions, &prefs, false);
+        let layout = layout_list(&sessions, &prefs, false, false, 0);
         let [_, chats] = layout.active.as_slice() else {
             panic!("expected the Pinned and Chats groups");
         };
@@ -1976,7 +2092,7 @@ mod tests {
         assert_eq!(chats.total, 4);
         assert_eq!(row_ids(chats), ["working", "waiting", "unseen"]);
 
-        let layout = layout_list(&sessions, &prefs, true);
+        let layout = layout_list(&sessions, &prefs, true, false, 0);
         let [_, chats] = layout.active.as_slice() else {
             panic!("expected the Pinned and Chats groups");
         };
@@ -1992,7 +2108,7 @@ mod tests {
             ..ChatListPrefs::default()
         };
 
-        let layout = layout_list(&sessions, &prefs, false);
+        let layout = layout_list(&sessions, &prefs, false, false, 0);
         let [chats] = layout.active.as_slice() else {
             panic!("expected only the Chats group");
         };
@@ -2005,12 +2121,84 @@ mod tests {
         let prefs = ChatListPrefs::default();
         let sessions = vec![session("loose", "/a")];
 
-        let matching = layout_list(&sessions, &prefs, true);
+        let matching = layout_list(&sessions, &prefs, true, false, 0);
         let kinds: Vec<&GroupKind> = matching.active.iter().map(|group| &group.kind).collect();
         assert_eq!(kinds, [&GroupKind::Chats]);
 
-        let no_match = layout_list(&[], &prefs, true);
+        let no_match = layout_list(&[], &prefs, true, false, 0);
         assert!(no_match.active.is_empty());
+    }
+
+    #[test]
+    fn archived_chats_wait_in_their_own_group_until_shown_or_searched() {
+        let archived = SessionSummary {
+            archived: true,
+            ..session("old", "/a")
+        };
+        let sessions = vec![session("live", "/a"), archived];
+        let prefs = ChatListPrefs::default();
+
+        let hidden = layout_list(&sessions, &prefs, false, false, 0);
+        let [chats] = hidden.active.as_slice() else {
+            panic!("expected only the Chats group");
+        };
+        assert_eq!(row_ids(chats), ["live"]);
+        let archived = hidden.archived.as_ref().expect("archived group");
+        assert!(archived.collapsed);
+        assert_eq!(archived.total, 1);
+        assert!(archived.rows.is_empty());
+
+        let shown = layout_list(&sessions, &prefs, false, true, 0);
+        assert_eq!(
+            shown.archived.as_ref().map(row_ids),
+            Some(vec!["old".to_string()])
+        );
+
+        let searched = layout_list(&sessions, &prefs, true, false, 0);
+        assert_eq!(
+            searched.archived.as_ref().map(row_ids),
+            Some(vec!["old".to_string()])
+        );
+
+        let none_archived = layout_list(&sessions[..1], &prefs, false, false, 0);
+        assert!(none_archived.archived.is_none());
+    }
+
+    #[test]
+    fn first_chat_older_than_the_cutoff_starts_the_older_rows() {
+        let at = |id: &str, updated_at: i64| SessionSummary {
+            updated_at,
+            ..session(id, "/a")
+        };
+        let side_chat = SessionSummary {
+            parent_id: Some("recent".to_string()),
+            side_chat: true,
+            ..at("side", 10)
+        };
+        let sessions = vec![
+            at("newest", 300),
+            at("recent", 200),
+            side_chat,
+            at("old", 90),
+            at("older", 50),
+        ];
+        let prefs = ChatListPrefs::default();
+        let starts_older = |layout: &ListLayout| -> Vec<String> {
+            layout
+                .active
+                .iter()
+                .flat_map(|group| &group.rows)
+                .filter(|row| row.starts_older)
+                .map(|row| row.session.id.clone())
+                .collect()
+        };
+
+        assert_eq!(
+            starts_older(&layout_list(&sessions, &prefs, false, false, 100)),
+            ["old"]
+        );
+        assert!(starts_older(&layout_list(&sessions, &prefs, false, false, 400)).is_empty());
+        assert!(starts_older(&layout_list(&sessions, &prefs, false, false, 0)).is_empty());
     }
 
     #[test]

@@ -78,6 +78,7 @@ fn controls(
         steering: steer_rx,
         interrupt: token.clone(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     (controls, steer_tx, token)
 }
@@ -381,6 +382,7 @@ async fn ask_user_question_round_trips_through_the_control_channel() {
         steering: steer_rx,
         interrupt: token.clone(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     let events = run_to_end(&harness(), request("scenario:askuser"), controls).await;
 
@@ -867,6 +869,7 @@ fn permission_controls(
         steering: steer_rx,
         interrupt: CancellationToken::new(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     (controls, steer_tx)
 }

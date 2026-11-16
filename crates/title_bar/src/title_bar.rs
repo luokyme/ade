@@ -147,10 +147,7 @@ fn render_project_tab(
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
     if let Some(activity) = activity {
-        tooltip_lines.push(match activity {
-            AgentActivity::Working => t!("Agent working").to_string(),
-            AgentActivity::NeedsInput => t!("Agent needs you").to_string(),
-        });
+        tooltip_lines.push(recent_projects::activity_label(activity).to_string());
     }
     let tooltip: SharedString = tooltip_lines.join("\n").into();
     ButtonLike::new(("project_tab", index))
@@ -163,10 +160,7 @@ fn render_project_tab(
                         .color(Color::Muted),
                 )
                 .when_some(activity, |this, activity| {
-                    this.child(Indicator::dot().color(match activity {
-                        AgentActivity::Working => Color::Accent,
-                        AgentActivity::NeedsInput => Color::Warning,
-                    }))
+                    this.child(Indicator::dot().color(recent_projects::activity_color(activity)))
                 }),
         )
         .tooltip(Tooltip::text(tooltip))

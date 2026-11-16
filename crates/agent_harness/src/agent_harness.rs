@@ -60,6 +60,8 @@ pub struct RunControls {
     pub interrupt: CancellationToken,
     /// Permission mode changes made while the run is going.
     pub permission: watch::Receiver<PermissionMode>,
+    /// Background task ids to stop while the run is going. Only Claude Code supports this.
+    pub stop_task: mpsc::UnboundedReceiver<String>,
 }
 
 #[derive(Clone, Debug)]

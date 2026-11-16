@@ -18,6 +18,7 @@ const TICK: Duration = Duration::from_secs(1);
 const CARD_WIDTH: f32 = 360.;
 
 struct TaskRow {
+    task_id: String,
     kind: BackgroundTaskKind,
     title: SharedString,
     command: Option<SharedString>,
@@ -157,6 +158,7 @@ fn background_rows(session: &AgentSession) -> Vec<TaskRow> {
                 untitled_task(task.kind)
             };
             TaskRow {
+                task_id: task.task_id.clone(),
                 kind: task.kind,
                 command: command.filter(|command| *command != title),
                 title,
@@ -208,6 +210,7 @@ impl Focusable for BackgroundTasksCard {
 impl Render for BackgroundTasksCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rows = background_rows(self.session.read(cx));
+        let can_stop = self.session.read(cx).can_stop_background_tasks();
         let muted = cx.theme().colors().text_muted;
         let faint = text_faint(cx);
         let code_font = super::code_font(cx);
@@ -267,7 +270,28 @@ impl Render for BackgroundTasksCard {
                                     .text_color(muted),
                                 )
                                 .child(div().flex_1().min_w_0().truncate().child(row.title))
-                                .child(div().flex_none().text_color(faint).child(row.elapsed)),
+                                .child(div().flex_none().text_color(faint).child(row.elapsed))
+                                .when(can_stop, |this| {
+                                    let task_id = row.task_id.clone();
+                                    this.child(
+                                        div()
+                                            .id(("stop-task", index))
+                                            .flex_none()
+                                            .p(px(3.))
+                                            .rounded(px(4.))
+                                            .cursor_pointer()
+                                            .text_color(muted)
+                                            .hover(|style| style.bg(hover))
+                                            .tooltip(Tooltip::text(t!("Stop")))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                this.session.update(cx, |session, _| {
+                                                    session.stop_background_task(&task_id)
+                                                });
+                                            }))
+                                            .child(icon(IconName::AgentClose, 12.)),
+                                    )
+                                }),
                         )
                         .when_some(row.command, |this, command| {
                             this.child(

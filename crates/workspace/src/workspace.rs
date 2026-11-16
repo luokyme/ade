@@ -9837,9 +9837,12 @@ pub fn quit_warning(cx: &App) -> Option<String> {
         .and_then(|warning| (warning.0)(cx))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Variants are ordered by how urgently a project's indicator should surface them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AgentActivity {
+    Completed,
     Working,
+    Failed,
     NeedsInput,
 }
 

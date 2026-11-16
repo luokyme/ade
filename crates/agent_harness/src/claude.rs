@@ -901,11 +901,13 @@ async fn run_session(session: Session) {
         mut steering,
         interrupt,
         mut permission,
+        mut stop_task,
     } = controls;
     let request_input = Arc::new(request_input);
     let launched_bypass = skip_prompts;
     let mut skip_prompts = skip_prompts;
     let mut permission_open = true;
+    let mut stop_task_open = true;
 
     let mut pending_steers = std::collections::VecDeque::new();
     let mut unrecorded_prompts = HashSet::from([first_prompt_id]);
@@ -1058,6 +1060,14 @@ async fn run_session(session: Session) {
                     if stdin_tx.send(StdinMsg::Line(line)).is_err() { break 'main; }
                 }
                 Err(_) => permission_open = false,
+            },
+
+            task_id = stop_task.recv(), if stop_task_open => match task_id {
+                Some(task_id) => {
+                    let id = format!("stop-task-{}", uuid::Uuid::new_v4());
+                    if stdin_tx.send(StdinMsg::Line(wire::stop_task_request_line(&id, &task_id))).is_err() { break 'main; }
+                }
+                None => stop_task_open = false,
             },
 
             _ = interrupt.cancelled(), if !interrupt_sent => {

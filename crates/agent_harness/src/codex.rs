@@ -884,6 +884,7 @@ async fn run_session(session: Session) {
         mut steering,
         interrupt,
         permission: mut permission_changes,
+        stop_task: _,
     } = controls;
     let request_input = Arc::new(request_input);
 

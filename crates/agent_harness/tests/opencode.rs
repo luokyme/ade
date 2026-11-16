@@ -301,6 +301,7 @@ fn controls_answering(
         steering,
         interrupt: token.clone(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     (controls, steer_tx, token, asked)
 }

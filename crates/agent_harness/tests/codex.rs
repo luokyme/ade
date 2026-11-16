@@ -75,6 +75,7 @@ fn controls(
         steering: steer_rx,
         interrupt: token.clone(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     (controls, steer_tx, token)
 }
@@ -401,6 +402,7 @@ async fn approvals_round_trip_as_input_requests() {
         steering: steer_rx,
         interrupt: token.clone(),
         permission: tokio::sync::watch::channel(agent_harness::PermissionMode::Ask).1,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     let mut req = request("scenario:approve");
     req.permission = PermissionMode::Auto;

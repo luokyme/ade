@@ -220,6 +220,8 @@ pub struct SessionMetadata {
     #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
     pub parent_id: Option<String>,
     #[serde(default)]
     pub side_chat: bool,
@@ -255,6 +257,7 @@ impl SessionMetadata {
             settings,
             context: None,
             pinned: false,
+            archived: false,
             parent_id: None,
             side_chat: false,
             fork_context: None,
@@ -811,6 +814,7 @@ struct ActiveRun {
     steering: tokio::sync::mpsc::Sender<SteerMessage>,
     interrupt: CancellationToken,
     permission: tokio::sync::watch::Sender<PermissionMode>,
+    stop_task: tokio::sync::mpsc::UnboundedSender<String>,
     _events: Task<()>,
 }
 
@@ -997,6 +1001,12 @@ impl AgentSession {
             Some(workspace::AgentActivity::NeedsInput)
         } else if self.working {
             Some(workspace::AgentActivity::Working)
+        } else if self.metadata.unseen {
+            match self.metadata.outcome {
+                Some(ChatOutcome::Errored) => Some(workspace::AgentActivity::Failed),
+                Some(ChatOutcome::Completed) => Some(workspace::AgentActivity::Completed),
+                None => None,
+            }
         } else {
             None
         }
@@ -1392,6 +1402,20 @@ impl AgentSession {
         }
     }
 
+    pub fn can_stop_background_tasks(&self) -> bool {
+        self.metadata.kind == AgentKind::Claude
+    }
+
+    /// The task leaves the list once the agent reports it stopped.
+    pub fn stop_background_task(&mut self, task_id: &str) {
+        let Some(run) = &self.run else {
+            return;
+        };
+        if run.stop_task.send(task_id.to_owned()).is_err() {
+            log::warn!("the agent run ended before background task {task_id} could be stopped");
+        }
+    }
+
     pub fn answer(&mut self, id: &str, answers: Vec<UserInputAnswer>, cx: &mut Context<Self>) {
         let Some(index) = self
             .pending_questions
@@ -1565,6 +1589,7 @@ impl AgentSession {
         let (steering_tx, steering_rx) = tokio::sync::mpsc::channel(32);
         let interrupt = CancellationToken::new();
         let (permission_tx, permission_rx) = tokio::sync::watch::channel(settings.permission);
+        let (stop_task_tx, stop_task_rx) = tokio::sync::mpsc::unbounded_channel();
         let (question_tx, question_rx) = futures::channel::mpsc::unbounded::<(
             Vec<UserInputQuestion>,
             tokio::sync::oneshot::Sender<Vec<UserInputAnswer>>,
@@ -1580,6 +1605,7 @@ impl AgentSession {
             steering: steering_rx,
             interrupt: interrupt.clone(),
             permission: permission_rx,
+            stop_task: stop_task_rx,
         };
 
         let run = spawn_agent_work(cx, async move { harness.run(request, controls).await });
@@ -1642,6 +1668,7 @@ impl AgentSession {
             steering: steering_tx,
             interrupt,
             permission: permission_tx,
+            stop_task: stop_task_tx,
             _events: events,
         });
         cx.notify();
@@ -2241,6 +2268,7 @@ pub struct SessionSummary {
     pub working: bool,
     pub needs_input: bool,
     pub pinned: bool,
+    pub archived: bool,
     pub parent_id: Option<String>,
     pub side_chat: bool,
     pub outcome: Option<ChatOutcome>,
@@ -2620,7 +2648,7 @@ impl AgentStore {
             .map(|session| session.read(cx))
             .filter(|session| session.metadata.is_in(roots))
             .filter_map(|session| session.agent_activity())
-            .max_by_key(|activity| *activity == workspace::AgentActivity::NeedsInput)
+            .max()
     }
 
     fn agent_activities(&self, cx: &App) -> Vec<(String, workspace::AgentActivity)> {
@@ -3303,6 +3331,7 @@ impl AgentStore {
                     working: live.is_some_and(|session| session.is_working()),
                     needs_input: live.is_some_and(|session| !session.pending_questions.is_empty()),
                     pinned: metadata.pinned,
+                    archived: metadata.archived,
                     parent_id: metadata.parent_id.clone(),
                     side_chat: metadata.side_chat,
                     outcome: metadata.outcome,
@@ -3441,6 +3470,19 @@ impl AgentStore {
 
     pub fn set_pinned(&mut self, id: &str, pinned: bool, cx: &mut Context<Self>) {
         self.update_session_metadata(id, |metadata| metadata.pinned = pinned, cx);
+    }
+
+    pub fn set_archived(&mut self, id: &str, archived: bool, cx: &mut Context<Self>) {
+        self.update_session_metadata(
+            id,
+            |metadata| {
+                metadata.archived = archived;
+                if archived {
+                    metadata.pinned = false;
+                }
+            },
+            cx,
+        );
     }
 
     pub fn fork_session(
@@ -4436,6 +4478,65 @@ pub(crate) mod tests {
             assert_eq!(activity(std::slice::from_ref(&idle_root)), None);
             assert_eq!(activity(&[directory.path().to_path_buf()]), None);
         });
+    }
+
+    #[gpui::test]
+    async fn stopping_a_background_task_reaches_the_run(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        let (stop_task, mut stopped) = tokio::sync::mpsc::unbounded_channel();
+        session.update(cx, |session, _| {
+            assert!(session.can_stop_background_tasks());
+            session.stop_background_task("before-run");
+            session.run = Some(ActiveRun {
+                steering: tokio::sync::mpsc::channel(1).0,
+                interrupt: CancellationToken::new(),
+                permission: tokio::sync::watch::channel(PermissionMode::Ask).0,
+                stop_task,
+                _events: Task::ready(()),
+            });
+            session.stop_background_task("bg1");
+        });
+        assert_eq!(stopped.try_recv().ok().as_deref(), Some("bg1"));
+        assert!(stopped.try_recv().is_err());
+    }
+
+    #[gpui::test]
+    async fn finished_and_failed_chats_show_until_seen(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let root = directory.path().to_path_buf();
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, root.clone(), cx)
+        });
+        let activity = |cx: &mut TestAppContext| {
+            store.read_with(cx, |store, cx| {
+                store.agent_activity_in(std::slice::from_ref(&root), cx)
+            })
+        };
+
+        session.update(cx, |session, _| {
+            session.metadata.outcome = Some(ChatOutcome::Completed);
+            session.metadata.unseen = true;
+        });
+        assert_eq!(activity(cx), Some(workspace::AgentActivity::Completed));
+
+        session.update(cx, |session, _| {
+            session.metadata.outcome = Some(ChatOutcome::Errored);
+        });
+        assert_eq!(activity(cx), Some(workspace::AgentActivity::Failed));
+
+        session.update(cx, |session, _| session.working = true);
+        assert_eq!(activity(cx), Some(workspace::AgentActivity::Working));
+
+        session.update(cx, |session, cx| {
+            session.working = false;
+            session.mark_seen(cx);
+        });
+        assert_eq!(activity(cx), None);
     }
 
     #[gpui::test]
@@ -5490,6 +5591,7 @@ done
                 steering,
                 interrupt: CancellationToken::new(),
                 permission: tokio::sync::watch::channel(PermissionMode::Ask).0,
+                stop_task: tokio::sync::mpsc::unbounded_channel().0,
                 _events: Task::ready(()),
             });
             for event in [
@@ -5941,6 +6043,34 @@ done
     }
 
     #[gpui::test]
+    async fn archiving_unpins_and_is_saved_without_opening_the_chat(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let id = store.update(cx, |store, cx| {
+            let session = store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx);
+            session.update(cx, |session, cx| session.touch(cx));
+            session.read(cx).metadata().id.clone()
+        });
+        store.update(cx, |store, _| store.live.clear());
+        store.update(cx, |store, cx| {
+            store.set_pinned(&id, true, cx);
+            store.set_archived(&id, true, cx);
+        });
+        cx.run_until_parked();
+        let reopened = new_store(directory.path(), cx);
+        cx.run_until_parked();
+        reopened.read_with(cx, |store, cx| {
+            let summary = &store.sessions_in(&[directory.path().to_path_buf()], cx)[0];
+            assert!(summary.archived);
+            assert!(!summary.pinned);
+        });
+        reopened.update(cx, |store, cx| store.set_archived(&id, false, cx));
+        reopened.read_with(cx, |store, cx| {
+            assert!(!store.sessions_in(&[directory.path().to_path_buf()], cx)[0].archived);
+        });
+    }
+
+    #[gpui::test]
     async fn saved_messages_toggle_persist_and_leave_with_their_chat(cx: &mut TestAppContext) {
         let directory = tempfile::tempdir().expect("temporary directory");
         let store = new_store(directory.path(), cx);
@@ -6007,7 +6137,7 @@ done
     }
 
     #[test]
-    fn chats_and_list_settings_saved_with_sections_or_archived_still_load() {
+    fn chats_and_list_settings_saved_with_sections_still_load() {
         let metadata: SessionMetadata = serde_json::from_value(serde_json::json!({
             "id": "a",
             "kind": "claude",
@@ -6022,6 +6152,7 @@ done
         }))
         .expect("old metadata loads");
         assert_eq!(metadata.id, "a");
+        assert!(metadata.archived);
         let prefs: ChatListPrefs = serde_json::from_value(serde_json::json!({
             "sections": [{ "id": "old-section", "name": "Later" }],
             "compact_rows": true,

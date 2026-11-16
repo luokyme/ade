@@ -138,6 +138,7 @@ async fn run_once(
         steering,
         interrupt,
         permission: permission_changes,
+        stop_task: tokio::sync::mpsc::unbounded_channel().1,
     };
     let mut events = harness.run(request, controls).await?;
     let mut current = String::new();
