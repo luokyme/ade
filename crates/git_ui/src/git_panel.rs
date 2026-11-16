@@ -7975,13 +7975,21 @@ impl GitPanel {
                 this.child(
                     h_flex()
                         .flex_none()
-                        .items_baseline()
+                        // With a line height equal to the font size, aligning the
+                        // bottoms lines the unit up with the number's baseline.
+                        .items_end()
                         .child(
                             Label::new(amount.to_string())
                                 .size(LabelSize::Small)
+                                .line_height_style(LineHeightStyle::UiLabel)
                                 .color(Color::Muted),
                         )
-                        .child(Label::new(unit).size(LabelSize::XSmall).color(Color::Muted)),
+                        .child(
+                            Label::new(unit)
+                                .size(LabelSize::XSmall)
+                                .line_height_style(LineHeightStyle::UiLabel)
+                                .color(Color::Muted),
+                        ),
                 )
             })
             .when(!has_context_menu, |this| {
