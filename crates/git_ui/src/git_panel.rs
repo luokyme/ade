@@ -5,7 +5,7 @@ use crate::commit_context_menu::{
     CommitContextMenuData, CommitContextMenuSource, commit_context_menu,
 };
 use crate::commit_modal::CommitModal;
-use crate::commit_tooltip::CommitTooltip;
+use crate::commit_tooltip::{CommitAvatar, CommitTooltip};
 use crate::commit_view::{CommitView, open_file_at_commit};
 use crate::git_panel_settings::GitPanelScrollbarAccessor;
 use crate::project_diff::{DeployBranchDiff, ProjectDiff};
@@ -41,9 +41,9 @@ use git::{
     Amend, Commit, Signoff, SkipHooks, ToggleStaged, repository::RepoPath, status::FileStatus,
 };
 use git::{
-    ExpandCommitEditor, GenerateCommitMessage, GitHostingProviderRegistry, Refresh,
+    ExpandCommitEditor, GenerateCommitMessage, GitHostingProviderRegistry, GitRemote, Refresh,
     RestoreTrackedFiles, StageAll, StashAll, StashApply, StashPop, StashStaged, StashTracked,
-    ToggleFillCommitEditor, TrashUntrackedFiles, UnstageAll, ViewFile,
+    ToggleFillCommitEditor, TrashUntrackedFiles, UnstageAll, ViewFile, parse_git_remote_url,
 };
 use gpui::{
     AbsoluteLength, Action, Anchor, AnyElement, AsyncWindowContext, ClickEvent, ClipboardItem,
@@ -545,7 +545,8 @@ struct HistoryAnchor {
 }
 
 const HISTORY_ROW_HEIGHT: Pixels = px(22.);
-const HISTORY_LANE_WIDTH: Pixels = px(16.);
+const HISTORY_LANE_WIDTH: Pixels = px(18.);
+const HISTORY_AVATAR_SIZE: Pixels = px(14.);
 const DEFAULT_HISTORY_RATIO: f32 = 0.4;
 const MIN_HISTORY_RATIO: f32 = 0.1;
 const MAX_HISTORY_RATIO: f32 = 0.9;
@@ -7010,13 +7011,12 @@ impl GitPanel {
     fn render_history_lane(
         &self,
         row_index: usize,
-        dot: Option<bool>,
+        marker: Option<AnyElement>,
         cx: &App,
     ) -> impl IntoElement {
-        let color = cx.theme().colors().text_accent;
+        let color = cx.theme().colors().border;
         let is_first = row_index == 0;
         let is_last = row_index + 1 >= self.history_rows.len();
-        let dot_size = px(8.);
         div()
             .relative()
             .flex_none()
@@ -7041,25 +7041,54 @@ impl GitPanel {
                     })
                     .bg(color),
             )
-            .when_some(dot, |this, is_head| {
-                this.child(
-                    div()
-                        .absolute()
-                        .size(dot_size)
-                        .top((HISTORY_ROW_HEIGHT - dot_size) / 2. - px(1.))
-                        .left((HISTORY_LANE_WIDTH - dot_size) / 2.)
-                        .rounded_full()
-                        .map(|this| {
-                            if is_head {
-                                this.border_2()
-                                    .border_color(color)
-                                    .bg(cx.theme().colors().panel_background)
-                            } else {
-                                this.bg(color)
-                            }
-                        }),
-                )
+            .when_some(marker, |this, marker| {
+                this.child(h_flex().absolute().inset_0().justify_center().child(marker))
             })
+    }
+
+    fn render_history_author_avatar(
+        sha: &SharedString,
+        author_name: &SharedString,
+        author_email: Option<SharedString>,
+        remote: Option<&GitRemote>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        let identity = author_email.clone().unwrap_or_else(|| author_name.clone());
+        let hosted_avatar = CommitAvatar::new(sha, author_email, remote).avatar(window, cx);
+        if let Some(avatar) = hosted_avatar {
+            return avatar.size(HISTORY_AVATAR_SIZE).into_any_element();
+        }
+        let accents = &cx.theme().accents().0;
+        let background = if identity.is_empty() || accents.is_empty() {
+            cx.theme().colors().element_disabled
+        } else {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(identity.as_ref(), &mut hasher);
+            let index = std::hash::Hasher::finish(&hasher) as usize % accents.len();
+            accents
+                .get(index)
+                .copied()
+                .unwrap_or(cx.theme().colors().text_accent)
+        };
+        let initial: SharedString = author_name
+            .chars()
+            .next()
+            .map(|character| character.to_uppercase().collect::<String>())
+            .unwrap_or_default()
+            .into();
+        h_flex()
+            .flex_none()
+            .size(HISTORY_AVATAR_SIZE)
+            .justify_center()
+            .rounded_full()
+            .bg(background)
+            .text_color(cx.theme().colors().panel_background)
+            .text_size(px(9.))
+            .font_weight(gpui::FontWeight::BOLD)
+            .line_height(HISTORY_AVATAR_SIZE)
+            .child(initial)
+            .into_any_element()
     }
 
     fn render_history_tab(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -7665,6 +7694,18 @@ impl GitPanel {
         }
     }
 
+    fn git_remote(&self, cx: &mut App) -> Option<GitRemote> {
+        let repository = self.active_repository.as_ref()?;
+        let remote_url = repository.read(cx).default_remote_url()?;
+        let provider_registry = GitHostingProviderRegistry::default_global(cx);
+        let (provider, parsed) = parse_git_remote_url(provider_registry, &remote_url)?;
+        Some(GitRemote {
+            host: provider,
+            owner: parsed.owner.into(),
+            repo: parsed.repo.into(),
+        })
+    }
+
     fn render_commit_history(
         &self,
         window: &mut Window,
@@ -7755,15 +7796,29 @@ impl GitPanel {
         let sha_shared = SharedString::from(entry.sha.to_string());
         let ref_names = entry.ref_names;
 
-        let (subject, author_name, timestamp): (SharedString, SharedString, Option<i64>) =
-            match &data {
-                Some(data) => (
-                    data.subject.clone(),
-                    data.author_name.clone(),
-                    Some(data.commit_timestamp),
-                ),
-                None => (t!("Loading…"), "".into(), None),
-            };
+        let (subject, author_name, author_email, timestamp): (
+            SharedString,
+            SharedString,
+            Option<SharedString>,
+            Option<i64>,
+        ) = match &data {
+            Some(data) => (
+                data.subject.clone(),
+                data.author_name.clone(),
+                Some(data.author_email.clone()),
+                Some(data.commit_timestamp),
+            ),
+            None => (t!("Loading…"), "".into(), None, None),
+        };
+        let remote = self.git_remote(cx);
+        let avatar = Self::render_history_author_avatar(
+            &sha_shared,
+            &author_name,
+            author_email,
+            remote.as_ref(),
+            window,
+            cx,
+        );
 
         let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
         let now = time::OffsetDateTime::now_utc();
@@ -7778,7 +7833,6 @@ impl GitPanel {
                 )
                 .into()
             });
-        let relative_time_shown = relative_time.is_some();
 
         let is_unpushed = commit < ahead_count;
         let ref_chip = |ref_name: &HistoryRef| {
@@ -7808,7 +7862,7 @@ impl GitPanel {
             .when(is_context_menu_target, |this| {
                 this.bg(cx.theme().colors().element_hover)
             })
-            .child(self.render_history_lane(row_index, Some(commit == 0), cx))
+            .child(self.render_history_lane(row_index, Some(avatar), cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -7845,33 +7899,14 @@ impl GitPanel {
                         .color(Color::Muted),
                 )
             })
-            .child(
-                h_flex()
-                    .flex_none()
-                    .gap_1p5()
-                    .when_some(relative_time, |this, relative_time| {
-                        this.child(
-                            Label::new(relative_time)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                    })
-                    .when(relative_time_shown && !author_name.is_empty(), |this| {
-                        this.child(
-                            Label::new("•")
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .alpha(0.5),
-                        )
-                    })
-                    .when(!author_name.is_empty(), |this| {
-                        this.child(
-                            Label::new(author_name)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted),
-                        )
-                    }),
-            )
+            .when_some(relative_time, |this, relative_time| {
+                this.child(
+                    Label::new(relative_time)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .flex_none(),
+                )
+            })
             .when(!has_context_menu, |this| {
                 let git_panel = cx.entity();
                 this.hoverable_tooltip(move |window, cx| {
