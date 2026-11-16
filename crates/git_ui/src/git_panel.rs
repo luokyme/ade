@@ -109,7 +109,6 @@ const GIT_PANEL_KEY: &str = "GitPanel";
 const UPDATE_DEBOUNCE: Duration = Duration::from_millis(50);
 // TODO: We should revise this part. It seems the indentation width is not aligned with the one in project panel
 const TREE_INDENT: f32 = 16.0;
-const MAX_HISTORY_TAG_CHIPS: usize = 3;
 // Horizontal offset that aligns the tree indent guides with the row icon column.
 const INDENT_GUIDE_LEFT_OFFSET: gpui::Pixels = gpui::px(19.);
 
@@ -615,6 +614,33 @@ fn remote_branch_names(branches: &[Branch], remote_name: &str) -> Vec<SharedStri
         .filter(|name| *name != "HEAD")
         .map(|name| SharedString::from(name.to_string()))
         .collect()
+}
+
+/// Splits the age of a commit into an amount and a short unit, e.g. `(4, "m")`.
+fn compact_relative_time(seconds_ago: i64) -> (i64, &'static str) {
+    const MINUTE: i64 = 60;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    const WEEK: i64 = 7 * DAY;
+    const MONTH: i64 = 30 * DAY;
+    const YEAR: i64 = 365 * DAY;
+
+    let seconds_ago = seconds_ago.max(0);
+    if seconds_ago < MINUTE {
+        (seconds_ago, "s")
+    } else if seconds_ago < HOUR {
+        (seconds_ago / MINUTE, "m")
+    } else if seconds_ago < DAY {
+        (seconds_ago / HOUR, "h")
+    } else if seconds_ago < WEEK {
+        (seconds_ago / DAY, "d")
+    } else if seconds_ago < MONTH {
+        (seconds_ago / WEEK, "w")
+    } else if seconds_ago < YEAR {
+        (seconds_ago / MONTH, "mo")
+    } else {
+        (seconds_ago / YEAR, "y")
+    }
 }
 
 fn commit_history_from_response(
@@ -1319,6 +1345,7 @@ struct CommitHistoryEntry {
 struct HistoryRef {
     name: SharedString,
     is_tag: bool,
+    is_head: bool,
 }
 
 impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
@@ -1334,13 +1361,19 @@ impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
                 .ref_names
                 .iter()
                 .filter_map(|ref_name| {
-                    let (name, is_tag) = match ref_name.strip_prefix("tag: ") {
-                        Some(tag_name) => (tag_name, true),
-                        None => (ref_name.strip_prefix("HEAD -> ").unwrap_or(ref_name), false),
+                    let (name, is_tag, is_head) = match ref_name.strip_prefix("tag: ") {
+                        Some(tag_name) => (tag_name, true, false),
+                        None => match ref_name.strip_prefix("HEAD -> ") {
+                            Some(branch_name) => (branch_name, false, true),
+                            None => (ref_name.as_ref(), false, false),
+                        },
                     };
-                    (!name.is_empty() && name != "HEAD").then(|| HistoryRef {
+                    // `origin/HEAD` only mirrors another remote branch on the same commit.
+                    let is_symbolic_head = name == "HEAD" || name.ends_with("/HEAD");
+                    (!name.is_empty() && !is_symbolic_head).then(|| HistoryRef {
                         name: SharedString::from(name.to_string()),
                         is_tag,
+                        is_head,
                     })
                 })
                 .collect(),
@@ -7046,6 +7079,82 @@ impl GitPanel {
             })
     }
 
+    fn render_history_refs(
+        row_index: usize,
+        ref_names: &[HistoryRef],
+        has_context_menu: bool,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let primary = ref_names
+            .iter()
+            .find(|ref_name| ref_name.is_head)
+            .or_else(|| ref_names.iter().find(|ref_name| !ref_name.is_tag))
+            .or_else(|| ref_names.first())?;
+        let remote_suffix = format!("/{}", primary.name);
+        let has_matching_remote = !primary.is_tag
+            && ref_names.iter().any(|ref_name| {
+                !ref_name.is_tag
+                    && ref_name.name != primary.name
+                    && ref_name.name.ends_with(remote_suffix.as_str())
+            });
+        let hidden_count = ref_names.len() - 1 - usize::from(has_matching_remote);
+        let all_ref_names: SharedString = ref_names
+            .iter()
+            .map(|ref_name| ref_name.name.as_ref())
+            .join("\n")
+            .into();
+
+        Some(
+            h_flex()
+                .id(("commit-history-refs", row_index))
+                .flex_none()
+                .max_w(rems(7.))
+                .h_4()
+                .px_1()
+                .overflow_hidden()
+                .gap_0p5()
+                .rounded_sm()
+                .bg(cx.theme().colors().element_background)
+                .child(
+                    Icon::new(if primary.is_tag {
+                        IconName::Hash
+                    } else {
+                        IconName::GitBranch
+                    })
+                    .size(IconSize::XSmall)
+                    .color(if primary.is_head {
+                        Color::Accent
+                    } else {
+                        Color::Muted
+                    }),
+                )
+                .child(
+                    Label::new(primary.name.clone())
+                        .size(LabelSize::XSmall)
+                        .truncate(),
+                )
+                .when(has_matching_remote, |this| {
+                    this.child(
+                        Icon::new(IconName::Server)
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                })
+                .when(hidden_count > 0, |this| {
+                    this.child(
+                        Label::new(format!("+{hidden_count}"))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted)
+                            .flex_none(),
+                    )
+                })
+                .when(!has_context_menu, |this| {
+                    this.tooltip(Tooltip::text(all_ref_names))
+                })
+                .into_any_element(),
+        )
+    }
+
     fn render_history_author_avatar(
         sha: &SharedString,
         author_name: &SharedString,
@@ -7820,31 +7929,11 @@ impl GitPanel {
             cx,
         );
 
-        let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-        let now = time::OffsetDateTime::now_utc();
-        let relative_time: Option<SharedString> = timestamp
-            .and_then(|timestamp| time::OffsetDateTime::from_unix_timestamp(timestamp).ok())
-            .map(|date_time| {
-                time_format::format_localized_timestamp(
-                    date_time,
-                    now,
-                    local_offset,
-                    time_format::TimestampFormat::Relative,
-                )
-                .into()
-            });
+        let relative_time = timestamp.map(|timestamp| {
+            compact_relative_time(time::OffsetDateTime::now_utc().unix_timestamp() - timestamp)
+        });
 
         let is_unpushed = commit < ahead_count;
-        let ref_chip = |ref_name: &HistoryRef| {
-            let label = ref_name.name.clone();
-            Chip::new(label.clone())
-                .truncate()
-                .when(!ref_name.is_tag, |chip| {
-                    chip.icon(IconName::GitBranch).icon_color(Color::Accent)
-                })
-                .when(!has_context_menu, |chip| chip.tooltip(Tooltip::text(label)))
-        };
-
         h_flex()
             .id(("commit-history-item", row_index))
             .cursor_pointer()
@@ -7867,31 +7956,14 @@ impl GitPanel {
                 h_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(Label::new(subject).truncate()),
+                    .child(Label::new(subject).size(LabelSize::Small).truncate()),
             )
-            .when(!ref_names.is_empty(), |this| {
-                let hidden_ref_count = ref_names.len().saturating_sub(MAX_HISTORY_TAG_CHIPS);
-                this.child(
-                    h_flex()
-                        .min_w_0()
-                        .max_w(relative(0.5))
-                        .gap_1()
-                        .children(ref_names.iter().take(MAX_HISTORY_TAG_CHIPS).map(ref_chip))
-                        .when(hidden_ref_count > 0, |this| {
-                            let hidden_ref_names = ref_names[MAX_HISTORY_TAG_CHIPS..]
-                                .iter()
-                                .map(|ref_name| ref_name.name.as_ref())
-                                .join(", ");
-                            this.child(
-                                Chip::new(format!("+{hidden_ref_count}"))
-                                    .bg_color(cx.theme().colors().element_active.opacity(0.8))
-                                    .when(!has_context_menu, |chip| {
-                                        chip.tooltip(Tooltip::text(hidden_ref_names))
-                                    }),
-                            )
-                        }),
-                )
-            })
+            .children(Self::render_history_refs(
+                row_index,
+                &ref_names,
+                has_context_menu,
+                cx,
+            ))
             .when(is_unpushed, |this| {
                 this.child(
                     Icon::new(IconName::ArrowUp)
@@ -7899,12 +7971,17 @@ impl GitPanel {
                         .color(Color::Muted),
                 )
             })
-            .when_some(relative_time, |this, relative_time| {
+            .when_some(relative_time, |this, (amount, unit)| {
                 this.child(
-                    Label::new(relative_time)
-                        .size(LabelSize::Small)
-                        .color(Color::Muted)
-                        .flex_none(),
+                    h_flex()
+                        .flex_none()
+                        .items_baseline()
+                        .child(
+                            Label::new(amount.to_string())
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(unit).size(LabelSize::XSmall).color(Color::Muted)),
                 )
             })
             .when(!has_context_menu, |this| {
@@ -10191,6 +10268,18 @@ mod tests {
             editor::init(cx);
             crate::init(cx);
         });
+    }
+
+    #[test]
+    fn test_compact_relative_time() {
+        assert_eq!(compact_relative_time(-5), (0, "s"));
+        assert_eq!(compact_relative_time(59), (59, "s"));
+        assert_eq!(compact_relative_time(4 * 60 + 30), (4, "m"));
+        assert_eq!(compact_relative_time(3 * 3600), (3, "h"));
+        assert_eq!(compact_relative_time(2 * 86400), (2, "d"));
+        assert_eq!(compact_relative_time(15 * 86400), (2, "w"));
+        assert_eq!(compact_relative_time(65 * 86400), (2, "mo"));
+        assert_eq!(compact_relative_time(800 * 86400), (2, "y"));
     }
 
     #[test]
