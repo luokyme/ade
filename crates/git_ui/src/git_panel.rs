@@ -7755,10 +7755,30 @@ impl GitPanel {
         let sha_shared = SharedString::from(entry.sha.to_string());
         let ref_names = entry.ref_names;
 
-        let (subject, author_name): (SharedString, SharedString) = match &data {
-            Some(data) => (data.subject.clone(), data.author_name.clone()),
-            None => (t!("Loading…"), "".into()),
-        };
+        let (subject, author_name, timestamp): (SharedString, SharedString, Option<i64>) =
+            match &data {
+                Some(data) => (
+                    data.subject.clone(),
+                    data.author_name.clone(),
+                    Some(data.commit_timestamp),
+                ),
+                None => (t!("Loading…"), "".into(), None),
+            };
+
+        let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+        let now = time::OffsetDateTime::now_utc();
+        let relative_time: Option<SharedString> = timestamp
+            .and_then(|timestamp| time::OffsetDateTime::from_unix_timestamp(timestamp).ok())
+            .map(|date_time| {
+                time_format::format_localized_timestamp(
+                    date_time,
+                    now,
+                    local_offset,
+                    time_format::TimestampFormat::Relative,
+                )
+                .into()
+            });
+        let relative_time_shown = relative_time.is_some();
 
         let is_unpushed = commit < ahead_count;
         let ref_chip = |ref_name: &HistoryRef| {
@@ -7793,16 +7813,7 @@ impl GitPanel {
                 h_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_1p5()
-                    .child(Label::new(subject).truncate())
-                    .when(!author_name.is_empty(), |this| {
-                        this.child(
-                            Label::new(author_name)
-                                .size(LabelSize::Small)
-                                .color(Color::Muted)
-                                .flex_none(),
-                        )
-                    }),
+                    .child(Label::new(subject).truncate()),
             )
             .when(!ref_names.is_empty(), |this| {
                 let hidden_ref_count = ref_names.len().saturating_sub(MAX_HISTORY_TAG_CHIPS);
@@ -7834,6 +7845,33 @@ impl GitPanel {
                         .color(Color::Muted),
                 )
             })
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_1p5()
+                    .when_some(relative_time, |this, relative_time| {
+                        this.child(
+                            Label::new(relative_time)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                    })
+                    .when(relative_time_shown && !author_name.is_empty(), |this| {
+                        this.child(
+                            Label::new("•")
+                                .size(LabelSize::Small)
+                                .color(Color::Muted)
+                                .alpha(0.5),
+                        )
+                    })
+                    .when(!author_name.is_empty(), |this| {
+                        this.child(
+                            Label::new(author_name)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                    }),
+            )
             .when(!has_context_menu, |this| {
                 let git_panel = cx.entity();
                 this.hoverable_tooltip(move |window, cx| {

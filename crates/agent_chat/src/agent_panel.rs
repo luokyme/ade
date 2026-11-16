@@ -167,13 +167,13 @@ pub(crate) fn open_chat(
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    open_chat_in(workspace, session, false, window, cx)
+    open_chat_in(workspace, session, None, window, cx)
 }
 
 fn open_chat_in(
     workspace: &mut Workspace,
     session: Entity<AgentSession>,
-    split: bool,
+    split: Option<SplitDirection>,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -183,7 +183,7 @@ fn open_chat_in(
     let kind = session.read(cx).kind();
     let store = store_for(workspace, cx);
     store.update(cx, |store, cx| store.update_agent_if_due(kind, cx));
-    if !split && crate::chat_panel::should_open_in_panel(workspace, cx) {
+    if split.is_none() && crate::chat_panel::should_open_in_panel(workspace, cx) {
         crate::chat_panel::show_chat_in_panel(workspace, session, store, window, cx);
         return;
     }
@@ -198,8 +198,8 @@ fn open_chat_in(
     let project = workspace.project().clone();
     let weak_workspace = cx.entity().downgrade();
     let view = cx.new(|cx| ChatView::new(session, store, project, weak_workspace, window, cx));
-    if split {
-        workspace.split_item(SplitDirection::Right, Box::new(view), window, cx);
+    if let Some(direction) = split {
+        workspace.split_item(direction, Box::new(view), window, cx);
     } else {
         workspace.add_item_to_active_pane(Box::new(view), None, true, window, cx);
     }
@@ -287,7 +287,13 @@ impl AgentPanel {
         })
     }
 
-    fn open_session(&mut self, id: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_session(
+        &mut self,
+        id: SharedString,
+        split: Option<SplitDirection>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let task = self
             .store
             .update(cx, |store, cx| store.open_session(&id, cx));
@@ -295,7 +301,7 @@ impl AgentPanel {
         cx.spawn_in(window, async move |_, cx| {
             let session = task.await?;
             workspace.update_in(cx, |workspace, window, cx| {
-                open_chat(workspace, session, window, cx)
+                open_chat_in(workspace, session, split, window, cx)
             })
         })
         .detach_and_log_err(cx);
@@ -309,7 +315,7 @@ impl AgentPanel {
         cx.spawn_in(window, async move |_, cx| {
             let session = task.await?;
             workspace.update_in(cx, |workspace, window, cx| {
-                open_chat_in(workspace, session, false, window, cx)
+                open_chat_in(workspace, session, None, window, cx)
             })
         })
         .detach_and_log_err(cx);
@@ -786,6 +792,12 @@ impl AgentPanel {
         let colors = cx.theme().colors();
         let text_muted = colors.text_muted;
         let (key, icon, text, icon_color) = match action {
+            RowAction::SplitRight => (
+                "split",
+                IconName::AgentSplitRight,
+                t!("Open in Split Right"),
+                text_muted,
+            ),
             RowAction::Pin { pinned } => (
                 "pin",
                 IconName::AgentPin,
@@ -838,13 +850,20 @@ impl AgentPanel {
                 icon_color,
             ))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.hovered_row = None;
-                this.store.update(cx, |store, cx| match action {
-                    RowAction::Pin { pinned } => store.set_pinned(&id, !pinned, cx),
-                    RowAction::Archive { archived } => store.set_archived(&id, !archived, cx),
-                });
+                match action {
+                    RowAction::SplitRight => {
+                        this.open_session(id.clone(), Some(SplitDirection::Right), window, cx)
+                    }
+                    RowAction::Pin { pinned } => this
+                        .store
+                        .update(cx, |store, cx| store.set_pinned(&id, !pinned, cx)),
+                    RowAction::Archive { archived } => this
+                        .store
+                        .update(cx, |store, cx| store.set_archived(&id, !archived, cx)),
+                }
             }))
             .tooltip(Tooltip::text(text))
             .into_any_element()
@@ -907,6 +926,7 @@ impl AgentPanel {
             h_flex()
                 .gap(px(4.))
                 .when(!compact, |this| this.mr(px(-4.)))
+                .child(self.row_action(&id, RowAction::SplitRight, compact, cx))
                 .when(!archived, |this| {
                     this.child(self.row_action(
                         &id,
@@ -1001,7 +1021,7 @@ impl AgentPanel {
             }))
             .on_click(cx.listener({
                 let id = id.clone();
-                move |this, _, window, cx| this.open_session(id.clone(), window, cx)
+                move |this, _, window, cx| this.open_session(id.clone(), None, window, cx)
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -1552,6 +1572,7 @@ impl RowStatus {
 
 #[derive(Clone, Copy)]
 enum RowAction {
+    SplitRight,
     Pin { pinned: bool },
     Archive { archived: bool },
 }
