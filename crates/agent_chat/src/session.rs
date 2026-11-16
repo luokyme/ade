@@ -990,6 +990,16 @@ impl AgentSession {
         self.deleted
     }
 
+    pub(crate) fn is_unused(&self) -> bool {
+        !self.deleted
+            && !self.working
+            && self.transcript.entries.is_empty()
+            && self.queue.is_empty()
+            && self.metadata.native_session_id.is_none()
+            && self.metadata.parent_id.is_none()
+            && self.metadata.fork_source.is_none()
+    }
+
     pub fn is_working(&self) -> bool {
         self.working
     }

@@ -390,7 +390,6 @@ impl ChatPanel {
                 cx,
             );
             pane.set_can_navigate(false, cx);
-            pane.display_nav_history_buttons(None);
             pane.set_should_display_tab_bar(|_, _| true);
             pane.set_can_split(Some(Arc::new(|_, _, _, _| false)));
             pane.set_can_toggle_zoom(false, cx);
@@ -935,6 +934,81 @@ mod tests {
         assert_eq!(docked(&setup, cx).len(), 3);
         assert_eq!(active(&setup, cx), Some(tab));
         assert!(tabs(&setup, cx).is_empty());
+    }
+
+    #[gpui::test]
+    async fn closing_unused_chats_removes_them_from_history(cx: &mut TestAppContext) {
+        let (setup, cx) = setup(cx).await;
+        for in_panel in [false, true] {
+            let chat = open_tab(&setup, cx);
+            let session = chat.read_with(cx, |chat, _| chat.session().clone());
+            session.update(cx, |session, cx| {
+                session.update_metadata(|metadata| metadata.title = "Unused".into(), cx);
+            });
+            if in_panel {
+                dock(&setup, &chat, cx);
+            }
+            let pane = if in_panel {
+                setup.panel.read_with(cx, |panel, _| panel.pane.clone())
+            } else {
+                setup
+                    .workspace
+                    .read_with(cx, |workspace, _| workspace.active_pane().clone())
+            };
+            pane.update_in(cx, |pane, window, cx| {
+                pane.close_item_by_id(chat.entity_id(), workspace::SaveIntent::Skip, window, cx)
+            })
+            .await
+            .expect("chat closes");
+            cx.run_until_parked();
+            assert!(session.read_with(cx, |session, _| session.is_deleted()));
+            assert!(
+                setup
+                    .store
+                    .read_with(cx, |store, _| store.sessions_metadata().next().is_none())
+            );
+            assert!(
+                std::fs::read_dir(setup.directory.path())
+                    .expect("chat directory")
+                    .all(|entry| !entry
+                        .expect("directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(".meta.json"))
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn closing_used_chats_keeps_them_in_history(cx: &mut TestAppContext) {
+        let (setup, cx) = setup(cx).await;
+        for in_panel in [false, true] {
+            let chat = open_tab(&setup, cx);
+            let session = chat.read_with(cx, |chat, _| chat.session().clone());
+            crate::session::tests::feed_user(&session, "Hello", cx);
+            if in_panel {
+                dock(&setup, &chat, cx);
+            }
+            let pane = if in_panel {
+                setup.panel.read_with(cx, |panel, _| panel.pane.clone())
+            } else {
+                setup
+                    .workspace
+                    .read_with(cx, |workspace, _| workspace.active_pane().clone())
+            };
+            pane.update_in(cx, |pane, window, cx| {
+                pane.close_item_by_id(chat.entity_id(), workspace::SaveIntent::Skip, window, cx)
+            })
+            .await
+            .expect("chat closes");
+            cx.run_until_parked();
+            assert!(!session.read_with(cx, |session, _| session.is_deleted()));
+            assert!(setup.store.read_with(cx, |store, cx| {
+                store
+                    .sessions_metadata()
+                    .any(|metadata| metadata.id == session.read(cx).metadata().id)
+            }));
+        }
     }
 
     #[gpui::test]

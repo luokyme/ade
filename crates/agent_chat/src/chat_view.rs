@@ -3482,6 +3482,32 @@ impl EventEmitter<ItemEvent> for ChatView {}
 impl Item for ChatView {
     type Event = ItemEvent;
 
+    fn on_removed(&self, cx: &mut Context<Self>) {
+        if self.is_subagent() || !self.session.read(cx).is_unused() {
+            return;
+        }
+        let session = self.session.clone();
+        let store = self.store.clone();
+        // Moving a chat between panes also removes it, so check after the move completes.
+        App::defer(cx, move |cx| {
+            if !session.read(cx).is_unused() {
+                return;
+            }
+            let still_open = crate::workspace_windows(cx).iter().any(|window| {
+                window.read(cx).is_ok_and(|multi| {
+                    multi.workspaces().any(|workspace| {
+                        crate::agent_panel::chat_view_for(workspace.read(cx), &session, cx)
+                            .is_some()
+                    })
+                })
+            });
+            if !still_open {
+                let id = session.read(cx).metadata().id.clone();
+                store.update(cx, |store, cx| store.delete_session(&id, cx));
+            }
+        });
+    }
+
     fn tab_content(&self, params: TabContentParams, _: &Window, cx: &App) -> AnyElement {
         let session = self.session.read(cx);
         let needs_input = self.subagent.is_none() && !session.pending_questions().is_empty();

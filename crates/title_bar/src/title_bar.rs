@@ -16,7 +16,7 @@ use crate::application_menu::{
 };
 
 use gpui::{
-    AnyElement, App, Context, Entity, Focusable, InteractiveElement, IntoElement, MouseButton,
+    AnyElement, App, Context, Entity, EntityId, Focusable, InteractiveElement, IntoElement, MouseButton,
     ParentElement, Render, Styled, Subscription, WeakEntity, Window, actions, div,
 };
 use i18n::t;
@@ -31,7 +31,8 @@ use ui::{ButtonLike, IconWithIndicator, Indicator, PopoverMenu, TintColor, Toolt
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
-    AgentActivity, MultiWorkspace, ProjectGroupKey, ToggleWorktreeSecurity, Workspace,
+    AgentActivity, GoBack, GoForward, MultiWorkspace, ProjectGroupKey, TabBarSettings,
+    ToggleWorktreeSecurity, Workspace,
 };
 
 use ade_actions::OpenRemote;
@@ -178,6 +179,7 @@ pub struct TitleBar {
     _subscriptions: Vec<Subscription>,
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
+    observed_pane: Option<(EntityId, Subscription)>,
 }
 
 impl Render for TitleBar {
@@ -262,9 +264,29 @@ impl Render for TitleBar {
             .flex_shrink_0()
             .h_full()
             .justify_center()
-            .when(title_bar_settings.show_project_items, |title_bar| {
-                title_bar.child(self.render_project_tabs(project_name, window, cx))
-            })
+            .child(
+                div()
+                    .relative()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .when_some(self.render_navigation_buttons(cx), |this, buttons| {
+                        // Anchored outside the project tabs so they stay centered.
+                        this.child(
+                            div()
+                                .absolute()
+                                .right_full()
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .pr_1()
+                                .child(buttons),
+                        )
+                    })
+                    .when(title_bar_settings.show_project_items, |this| {
+                        this.child(self.render_project_tabs(project_name, window, cx))
+                    }),
+            )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
         let right = h_flex()
@@ -373,6 +395,7 @@ impl TitleBar {
             _subscriptions: subscriptions,
             banner,
             update_version,
+            observed_pane: None,
         };
         if let Some(multi_workspace) = multi_workspace {
             this.observe_multi_workspace(&multi_workspace, cx);
@@ -598,6 +621,79 @@ impl TitleBar {
         } else {
             Some(button.into_any_element())
         }
+    }
+
+    fn render_navigation_buttons(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !TabBarSettings::get_global(cx).show_nav_history_buttons {
+            return None;
+        }
+        let workspace = self.workspace.upgrade()?;
+        let pane = workspace.read(cx).active_pane().clone();
+
+        if self
+            .observed_pane
+            .as_ref()
+            .is_none_or(|(pane_id, _)| *pane_id != pane.entity_id())
+        {
+            let subscription = cx.observe(&pane, |_, _, cx| cx.notify());
+            self.observed_pane = Some((pane.entity_id(), subscription));
+        }
+
+        let (can_go_back, can_go_forward) = {
+            let pane = pane.read(cx);
+            (pane.can_navigate_backward(), pane.can_navigate_forward())
+        };
+        let focus_handle = workspace.read(cx).focus_handle(cx);
+
+        let go_back = IconButton::new("navigate_backward", IconName::ArrowLeft)
+            .icon_size(IconSize::Small)
+            .disabled(!can_go_back)
+            .on_click({
+                let workspace = self.workspace.clone();
+                let pane = pane.downgrade();
+                move |_, window, cx| {
+                    let pane = pane.clone();
+                    workspace
+                        .update(cx, |workspace, cx| {
+                            workspace.go_back(pane, window, cx).detach_and_log_err(cx)
+                        })
+                        .log_err();
+                }
+            })
+            .tooltip({
+                let focus_handle = focus_handle.clone();
+                move |_window, cx| {
+                    Tooltip::for_action_in(t!("Go Back"), &GoBack, &focus_handle, cx)
+                }
+            });
+
+        let go_forward = IconButton::new("navigate_forward", IconName::ArrowRight)
+            .icon_size(IconSize::Small)
+            .disabled(!can_go_forward)
+            .on_click({
+                let workspace = self.workspace.clone();
+                let pane = pane.downgrade();
+                move |_, window, cx| {
+                    let pane = pane.clone();
+                    workspace
+                        .update(cx, |workspace, cx| {
+                            workspace
+                                .go_forward(pane, window, cx)
+                                .detach_and_log_err(cx)
+                        })
+                        .log_err();
+                }
+            })
+            .tooltip(move |_window, cx| {
+                Tooltip::for_action_in(t!("Go Forward"), &GoForward, &focus_handle, cx)
+            });
+
+        Some(
+            h_flex()
+                .child(go_back)
+                .child(go_forward)
+                .into_any_element(),
+        )
     }
 
     pub fn render_project_host(&self, cx: &mut Context<Self>) -> Option<AnyElement> {

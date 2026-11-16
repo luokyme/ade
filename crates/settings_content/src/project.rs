@@ -721,7 +721,7 @@ pub enum GitPathStyle {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum GitGraphDateFormat {
-    /// Day, short month name, year and time, like 04 Nov 2026 16:14.
+    /// Year, month, day and time with slashes, like 2026/11/04 16:14:00.
     #[default]
     Default,
     /// Year, month, day and time, like 2026-11-04 16:14:00.

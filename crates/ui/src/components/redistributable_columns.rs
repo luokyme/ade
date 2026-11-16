@@ -180,6 +180,12 @@ impl RedistributableColumnsState {
         self.cached_container_width = width;
     }
 
+    /// Replaces the current widths, for example after fitting columns to their content.
+    pub fn set_widths(&mut self, widths: TableRow<DefiniteLength>) {
+        self.committed_widths = widths.clone();
+        self.preview_widths = widths;
+    }
+
     pub fn commit_preview(&mut self) {
         self.committed_widths = self.preview_widths.clone();
     }

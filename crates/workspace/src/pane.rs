@@ -439,9 +439,6 @@ pub struct Pane {
     /// This is set to true if a user scroll has occurred more recently than a system scroll
     /// We want to suppress certain system scrolls when the user has intentionally scrolled
     suppress_scroll: bool,
-    /// Is None if navigation buttons are permanently turned off (and should not react to setting changes).
-    /// Otherwise, when `display_nav_history_buttons` is Some, it determines whether nav buttons should be displayed.
-    display_nav_history_buttons: Option<bool>,
     double_click_dispatch_action: Box<dyn Action>,
     save_modals_spawned: HashSet<EntityId>,
     close_pane_if_empty: bool,
@@ -612,9 +609,6 @@ impl Pane {
             render_tab_bar: Rc::new(Self::render_tab_bar),
             render_trailing_tab_button: Rc::new(default_render_trailing_tab_button),
             show_tab_bar_buttons: TabBarSettings::get_global(cx).show_tab_bar_buttons,
-            display_nav_history_buttons: Some(
-                TabBarSettings::get_global(cx).show_nav_history_buttons,
-            ),
             _subscriptions: subscriptions,
             double_click_dispatch_action,
             save_modals_spawned: HashSet::default(),
@@ -794,10 +788,6 @@ impl Pane {
 
     fn settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_bar_settings = TabBarSettings::get_global(cx);
-
-        if let Some(display_nav_history_buttons) = self.display_nav_history_buttons.as_mut() {
-            *display_nav_history_buttons = tab_bar_settings.show_nav_history_buttons;
-        }
 
         self.show_tab_bar_buttons = tab_bar_settings.show_tab_bar_buttons;
 
@@ -3539,52 +3529,6 @@ impl Pane {
 
         let focus_handle = self.focus_handle.clone();
 
-        let navigate_backward = IconButton::new("navigate_backward", IconName::ArrowLeft)
-            .icon_size(IconSize::Small)
-            .on_click({
-                let entity = cx.entity();
-                move |_, window, cx| {
-                    entity.update(cx, |pane, cx| {
-                        pane.navigate_backward(&Default::default(), window, cx)
-                    })
-                }
-            })
-            .disabled(!self.can_navigate_backward())
-            .tooltip({
-                let focus_handle = focus_handle.clone();
-                move |window, cx| {
-                    Tooltip::for_action_in(
-                        t!("Go Back"),
-                        &GoBack,
-                        &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
-                        cx,
-                    )
-                }
-            });
-
-        let navigate_forward = IconButton::new("navigate_forward", IconName::ArrowRight)
-            .icon_size(IconSize::Small)
-            .on_click({
-                let entity = cx.entity();
-                move |_, window, cx| {
-                    entity.update(cx, |pane, cx| {
-                        pane.navigate_forward(&Default::default(), window, cx)
-                    })
-                }
-            })
-            .disabled(!self.can_navigate_forward())
-            .tooltip({
-                let focus_handle = focus_handle.clone();
-                move |window, cx| {
-                    Tooltip::for_action_in(
-                        t!("Go Forward"),
-                        &GoForward,
-                        &window.focused(cx).unwrap_or_else(|| focus_handle.clone()),
-                        cx,
-                    )
-                }
-            });
-
         let mut tab_items = self
             .items
             .iter()
@@ -3617,8 +3561,6 @@ impl Pane {
                 pinned_tabs,
                 unpinned_tabs,
                 tab_count,
-                navigate_backward,
-                navigate_forward,
                 window,
                 cx,
             )
@@ -3627,8 +3569,6 @@ impl Pane {
                 pinned_tabs,
                 unpinned_tabs,
                 tab_count,
-                navigate_backward,
-                navigate_forward,
                 window,
                 cx,
             )
@@ -3638,20 +3578,10 @@ impl Pane {
     fn configure_tab_bar_start(
         &mut self,
         tab_bar: TabBar,
-        navigate_backward: IconButton,
-        navigate_forward: IconButton,
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> TabBar {
         tab_bar
-            .when(
-                self.display_nav_history_buttons.unwrap_or_default(),
-                |tab_bar| {
-                    tab_bar
-                        .start_child(navigate_backward)
-                        .start_child(navigate_forward)
-                },
-            )
             .map(|tab_bar| {
                 if self.show_tab_bar_buttons {
                     let render_tab_buttons = self.render_tab_bar_buttons.clone();
@@ -3670,8 +3600,6 @@ impl Pane {
         pinned_tabs: Vec<AnyElement>,
         unpinned_tabs: Vec<AnyElement>,
         tab_count: usize,
-        navigate_backward: IconButton,
-        navigate_forward: IconButton,
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> AnyElement {
@@ -3680,8 +3608,6 @@ impl Pane {
         let tab_bar = self
             .configure_tab_bar_start(
                 TabBar::new("tab_bar"),
-                navigate_backward,
-                navigate_forward,
                 window,
                 cx,
             )
@@ -3717,8 +3643,6 @@ impl Pane {
         pinned_tabs: Vec<AnyElement>,
         unpinned_tabs: Vec<AnyElement>,
         tab_count: usize,
-        navigate_backward: IconButton,
-        navigate_forward: IconButton,
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> AnyElement {
@@ -3727,8 +3651,6 @@ impl Pane {
         let pinned_tab_bar = self
             .configure_tab_bar_start(
                 TabBar::new("pinned_tab_bar"),
-                navigate_backward,
-                navigate_forward,
                 window,
                 cx,
             )
@@ -4343,10 +4265,6 @@ impl Pane {
                 .detach();
             })
             .log_err();
-    }
-
-    pub fn display_nav_history_buttons(&mut self, display: Option<bool>) {
-        self.display_nav_history_buttons = display;
     }
 
     fn pinned_item_ids(&self) -> Vec<EntityId> {

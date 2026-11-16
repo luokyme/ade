@@ -6353,6 +6353,8 @@ impl ProjectPanel {
 
         let depth = details.depth;
         let worktree_id = details.worktree_id;
+        let show_collapse_all =
+            kind.is_dir() && self.project.read(cx).entry_is_worktree_root(entry_id, cx);
 
         let bg_color = if is_marked {
             item_colors.marked
@@ -6845,7 +6847,8 @@ impl ProjectPanel {
                     .when(
                         canonical_path.is_some()
                             || diagnostic_count.is_some()
-                            || git_indicator.is_some(),
+                            || git_indicator.is_some()
+                            || show_collapse_all,
                         |this| {
                             let symlink_element = canonical_path.map(|path| {
                                 div()
@@ -6903,6 +6906,24 @@ impl ProjectPanel {
                                         this.child(git_indicator)
                                     })
                                     .when_some(symlink_element, |this, el| this.child(el))
+                                    .when(show_collapse_all, |this| {
+                                        this.child(
+                                            IconButton::new("collapse_all", IconName::ListCollapse)
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::for_action_title(
+                                                    t!("Collapse All"),
+                                                    &CollapseAllEntries,
+                                                ))
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.collapse_all_entries(
+                                                        &CollapseAllEntries,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                })),
+                                        )
+                                    })
                                     .into_any_element(),
                             )
                         },

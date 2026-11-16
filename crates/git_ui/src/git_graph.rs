@@ -5,6 +5,10 @@ use crate::{
     commit_view::CommitView,
     git_status_icon,
 };
+use ade_actions::{
+    buffer_search,
+    search::{SelectNextMatch, SelectPreviousMatch, ToggleCaseSensitive},
+};
 use collections::{BTreeMap, HashMap, IndexSet};
 use editor::Editor;
 use file_icons::FileIcons;
@@ -18,7 +22,7 @@ use gpui::{
     Action, Anchor, AnyElement, App, Bounds, ClickEvent, ClipboardItem, DefiniteLength,
     DismissEvent, DragMoveEvent, ElementId, Empty, Entity, EventEmitter, FocusHandle, Focusable,
     Hsla, MouseButton, MouseDownEvent, PathBuilder, Pixels, Point, ScrollHandle, ScrollStrategy,
-    ScrollWheelEvent, SharedString, Subscription, Task, TextStyleRefinement,
+    ScrollWheelEvent, SharedString, Subscription, Task, TextRun, TextStyleRefinement,
     UniformListScrollHandle, WeakEntity, Window, actions, anchored, deferred, point, prelude::*,
     px, uniform_list,
 };
@@ -44,20 +48,18 @@ use std::{
     sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
-use ade_actions::{
-    buffer_search,
-    search::{SelectNextMatch, SelectPreviousMatch, ToggleCaseSensitive},
-};
 
 use theme::AccentColors;
+use theme_settings::ThemeSettings;
 use time::{OffsetDateTime, UtcOffset, format_description::BorrowedFormatItem};
 use ui::{
     Chip, ColumnWidthConfig, CommonAnimationExt as _, ContextMenu, DiffStat, Divider,
     HeaderResizeInfo, HighlightedLabel, IndentGuideColors, ListItem, ListItemSpacing,
     RedistributableColumnsState, ScrollableHandle, Table, TableInteractionState,
-    TableRenderContext, TableResizeBehavior, Tooltip, WithScrollbar, bind_redistributable_columns,
-    prelude::*, redistribute_hidden_fractions, redistribute_hidden_widths,
-    render_redistributable_columns_resize_handles, render_table_header, table_row::TableRow,
+    TableRenderContext, TableResizeBehavior, TextSize, Tooltip, WithScrollbar,
+    bind_redistributable_columns, prelude::*, redistribute_hidden_fractions,
+    redistribute_hidden_widths, render_redistributable_columns_resize_handles, render_table_header,
+    table_row::TableRow,
 };
 use util::{ResultExt, debug_panic};
 use workspace::{
@@ -608,7 +610,7 @@ fn timestamp_format(date_format: GitGraphDateFormat) -> &'static [BorrowedFormat
     let (format, description) = match date_format {
         GitGraphDateFormat::Default => (
             &DEFAULT_FORMAT,
-            "[day] [month repr:short] [year] [hour]:[minute]",
+            "[year]/[month]/[day] [hour]:[minute]:[second]",
         ),
         GitGraphDateFormat::Iso => (&ISO_FORMAT, "[year]-[month]-[day] [hour]:[minute]:[second]"),
     };
@@ -1338,11 +1340,24 @@ pub struct GitGraph {
     changed_files_expanded_dirs: HashMap<RepoPath, bool>,
     pending_select_sha: Option<Oid>,
     nav_history: Option<ItemNavHistory>,
+    widest_author_name: Pixels,
+    fitted_columns: Option<FittedColumns>,
+}
+
+/// The inputs used the last time the date, author and commit columns were fitted to their
+/// content. Refitting only when these change keeps a manual column resize in place until the
+/// window is resized or wider content appears.
+#[derive(Clone, PartialEq)]
+struct FittedColumns {
+    container_width: Pixels,
+    content_widths: [Pixels; 3],
+    hidden: TableRow<bool>,
 }
 
 impl GitGraph {
     fn invalidate_state(&mut self, cx: &mut Context<Self>) {
         self.graph_data.clear();
+        self.widest_author_name = px(0.);
         self.search_state.matches.clear();
         self.search_state.selected_index = None;
         self.search_state.state.next_state();
@@ -1591,6 +1606,8 @@ impl GitGraph {
             changed_files_expanded_dirs: HashMap::default(),
             pending_select_sha: None,
             nav_history: None,
+            widest_author_name: px(0.),
+            fitted_columns: None,
         };
 
         this.fetch_initial_graph_data(cx);
@@ -1821,7 +1838,8 @@ impl GitGraph {
         }
 
         let date_format = ProjectSettings::get_global(cx).git.graph_date_format;
-        range
+        let mut author_names = Vec::new();
+        let rows = range
             .map(|idx| {
                 let Some((commit, repository)) =
                     self.graph_data.commits.get(idx).zip(repository.as_ref())
@@ -1848,6 +1866,7 @@ impl GitGraph {
                 if let CommitDataState::Loaded(ref data) = data {
                     subject = data.subject.clone();
                     author_name = data.author_name.clone();
+                    author_names.push(author_name.clone());
                     formatted_time = format_timestamp(data.commit_timestamp, date_format);
                 } else {
                     subject = t!("Loading…");
@@ -1939,7 +1958,159 @@ impl GitGraph {
                     column_label(short_sha.into()),
                 ]
             })
-            .collect()
+            .collect();
+
+        for author_name in author_names {
+            let width = Self::measure_cell_text(author_name, window, cx);
+            if width > self.widest_author_name {
+                self.widest_author_name = width;
+                cx.notify();
+            }
+        }
+        rows
+    }
+
+    fn measure_cell_text(text: SharedString, window: &Window, cx: &App) -> Pixels {
+        let font_size = TextSize::Default.rems(cx).to_pixels(window.rem_size());
+        let run = TextRun {
+            len: text.len(),
+            font: ThemeSettings::get_global(cx).ui_font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        window
+            .text_system()
+            .shape_line(text, font_size, &[run], None)
+            .width
+    }
+
+    /// Sizes the date, author and commit columns to their content and gives the remaining
+    /// width to the description column.
+    fn fit_columns_to_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Cell padding (`px_1` on both sides) plus room for the text to round up.
+        const CELL_PADDING: Pixels = px(12.);
+        const MIN_DESCRIPTION_FRACTION: f32 = 0.2;
+
+        let container_width = self.column_widths.read(cx).cached_container_width();
+        if container_width <= px(0.) {
+            return;
+        }
+        let date_format = ProjectSettings::get_global(cx).git.graph_date_format;
+        let sample_date = format_timestamp(1_798_729_199, date_format);
+        let content_widths =
+            [
+                Self::measure_cell_text(sample_date.into(), window, cx)
+                    .max(Self::measure_cell_text(t!("Date"), window, cx)),
+                self.widest_author_name
+                    .max(Self::measure_cell_text(t!("Author"), window, cx)),
+                Self::measure_cell_text("0000000".into(), window, cx).max(Self::measure_cell_text(
+                    t!("Commit"),
+                    window,
+                    cx,
+                )),
+            ];
+        let fitted = FittedColumns {
+            container_width,
+            content_widths,
+            hidden: self.column_visibility.clone(),
+        };
+        if self.fitted_columns.as_ref() == Some(&fitted) {
+            return;
+        }
+
+        let description_index = if matches!(self.log_source, LogSource::Path(_)) {
+            0
+        } else {
+            1
+        };
+        let is_hidden = |index: usize| self.column_visibility.get(index).copied().unwrap_or(false);
+        let mut stored = self
+            .column_widths
+            .read(cx)
+            .preview_fractions(window.rem_size())
+            .as_slice()
+            .to_vec();
+        if is_hidden(description_index) || stored.len() != description_index + 4 {
+            self.fitted_columns = Some(fitted);
+            return;
+        }
+
+        // Hidden columns keep their stored width and the visible ones are scaled up to fill
+        // the gap (see `redistribute_hidden_fractions`), so work in rendered fractions and
+        // convert back at the end.
+        let total: f32 = stored.iter().sum();
+        let hidden_total: f32 = (0..stored.len())
+            .filter(|index| is_hidden(*index))
+            .map(|index| stored[index])
+            .sum();
+        let visible_total = total - hidden_total;
+        if visible_total <= 0. {
+            return;
+        }
+        let mut rendered: Vec<f32> = stored
+            .iter()
+            .enumerate()
+            .map(|(index, fraction)| {
+                if is_hidden(index) {
+                    0.
+                } else {
+                    fraction / visible_total
+                }
+            })
+            .collect();
+        for (offset, content_width) in content_widths.iter().enumerate() {
+            let index = description_index + 1 + offset;
+            if !is_hidden(index) {
+                rendered[index] = (*content_width + CELL_PADDING) / container_width;
+            }
+        }
+        let fitted_total: f32 = (description_index + 1..rendered.len())
+            .map(|index| rendered[index])
+            .sum();
+        let graph_fraction: f32 = rendered[..description_index].iter().sum();
+        let available = (1. - graph_fraction - MIN_DESCRIPTION_FRACTION).max(0.);
+        if fitted_total > available && fitted_total > 0. {
+            let scale = available / fitted_total;
+            for fraction in &mut rendered[description_index + 1..] {
+                *fraction *= scale;
+            }
+        }
+        let used: f32 = rendered
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != description_index)
+            .map(|(_, fraction)| *fraction)
+            .sum();
+        rendered[description_index] = (1. - used).max(0.);
+
+        for (index, fraction) in stored.iter_mut().enumerate() {
+            if !is_hidden(index) {
+                *fraction = rendered[index] * visible_total;
+            }
+        }
+        let column_count = stored.len();
+        let widths = TableRow::from_vec(
+            stored.into_iter().map(DefiniteLength::Fraction).collect(),
+            column_count,
+        );
+        self.column_widths
+            .update(cx, |column_widths, _| column_widths.set_widths(widths));
+        self.fitted_columns = Some(fitted);
+
+        // The container width comes from the previous layout, so check again once this frame
+        // has been laid out in case the window was resized in between.
+        cx.on_next_frame(window, |this, _window, cx| {
+            let container_width = this.column_widths.read(cx).cached_container_width();
+            if this
+                .fitted_columns
+                .as_ref()
+                .is_some_and(|fitted| fitted.container_width != container_width)
+            {
+                cx.notify();
+            }
+        });
     }
 
     fn cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
@@ -3759,6 +3930,7 @@ impl Render for GitGraph {
                     this.child(self.render_loading_spinner(cx))
                 })
         } else {
+            self.fit_columns_to_content(window, cx);
             let is_path_history = matches!(self.log_source, LogSource::Path(_));
             let header_resize_info =
                 HeaderResizeInfo::from_redistributable(&self.column_widths, cx);
@@ -4784,7 +4956,7 @@ mod tests {
         );
 
         let default = format_timestamp(timestamp, GitGraphDateFormat::Default);
-        assert!(default.contains(" Nov 2026 "), "{default}");
+        assert_eq!(default, iso.replace('-', "/"));
     }
 
     fn build_oid_to_row_map(graph: &GraphData) -> HashMap<Oid, usize> {
