@@ -7571,14 +7571,18 @@ impl GitPanel {
             );
         }
 
-        if let Some((key, offset_in_item)) = anchor.scroll_top
-            && let Some((item_ix, exact)) = self.history_row_index(key)
-        {
-            self.commit_history_list.scroll_to(ListOffset {
-                item_ix,
-                offset_in_item: if exact { offset_in_item } else { px(0.) },
-            });
-        }
+        let scroll_top = anchor
+            .scroll_top
+            .and_then(|(key, offset_in_item)| {
+                self.history_row_index(key)
+                    .map(|(item_ix, exact)| ListOffset {
+                        item_ix,
+                        offset_in_item: if exact { offset_in_item } else { px(0.) },
+                    })
+            })
+            .unwrap_or_default();
+        // Splicing into an empty list moves its explicit offset past all new rows.
+        self.commit_history_list.scroll_to(scroll_top);
         let count = self.history_rows.len();
         let focused = anchor
             .focused
@@ -11059,6 +11063,56 @@ mod tests {
                     HistoryRow::Commit(1)
                 ]
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_history_scroll_position_after_loading_and_refresh(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree("/root", json!({ "project": { ".git": {} } }))
+            .await;
+        let panel = history_panel_for_project(fs, cx).await;
+
+        panel.update(cx, |panel, cx| {
+            let entries: Rc<[CommitHistoryEntry]> = (1..=3)
+                .map(|number| CommitHistoryEntry {
+                    sha: Oid::from_bytes(&[number; 20]).expect("valid commit ID"),
+                    tag_names: Vec::new(),
+                    ref_names: Vec::new(),
+                })
+                .collect();
+            panel.set_commit_history(CommitHistory::Loading, cx);
+            // An empty list can retain an explicit offset after a previous layout.
+            panel.commit_history_list.scroll_to(ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.),
+            });
+            panel.set_commit_history(CommitHistory::Loaded(entries.clone()), cx);
+            assert_eq!(panel.commit_history_list.logical_scroll_top().item_ix, 0);
+
+            panel.commit_history_list.scroll_to(ListOffset {
+                item_ix: 1,
+                offset_in_item: px(5.),
+            });
+            let refreshed_entries = std::iter::once(CommitHistoryEntry {
+                sha: Oid::from_bytes(&[4; 20]).expect("valid commit ID"),
+                tag_names: Vec::new(),
+                ref_names: Vec::new(),
+            })
+            .chain(entries.iter().cloned())
+            .collect();
+            panel.set_commit_history(CommitHistory::Loaded(refreshed_entries), cx);
+            let scroll_top = panel.commit_history_list.logical_scroll_top();
+            assert_eq!(scroll_top.item_ix, 2);
+            assert_eq!(scroll_top.offset_in_item, px(5.));
+
+            panel.set_commit_history(CommitHistory::Loading, cx);
+            panel.set_commit_history(CommitHistory::Loaded(entries), cx);
+            let scroll_top = panel.commit_history_list.logical_scroll_top();
+            assert_eq!(scroll_top.item_ix, 0);
+            assert_eq!(scroll_top.offset_in_item, px(0.));
         });
     }
 
