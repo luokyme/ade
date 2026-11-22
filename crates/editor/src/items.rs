@@ -67,7 +67,7 @@ use ade_actions::preview::{
     markdown::OpenPreview as OpenMarkdownPreview, svg::OpenPreview as OpenSvgPreview,
 };
 
-pub const MAX_TAB_TITLE_LEN: usize = 24;
+pub use workspace::item::MAX_TAB_TITLE_LEN;
 
 impl Item for Editor {
     type Event = EditorEvent;

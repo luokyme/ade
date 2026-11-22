@@ -3,7 +3,9 @@ use crate::stash::GitStash;
 use crate::status::{
     DiffTreeType, FileStatus, GitStatus, StatusCode, TrackedStatus, TreeDiff, TreeDiffStatus,
 };
-use crate::{Oid, RunHook, SHA256_HEX_LENGTH, SHORT_SHA_LENGTH};
+use crate::{
+    Oid, REBASE_APPLY_DIR, REBASE_MERGE_DIR, RunHook, SHA256_HEX_LENGTH, SHORT_SHA_LENGTH,
+};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_channel::Sender;
 use collections::HashMap;
@@ -663,6 +665,14 @@ pub enum ResetMode {
     Mixed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeOutcome {
+    Completed,
+    AlreadyUpToDate,
+    StoppedOnConflicts,
+    ReadyToCommit,
+}
+
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum FetchOptions {
     All,
@@ -863,6 +873,28 @@ pub trait GitRepository: Send + Sync {
         is_remote: bool,
         name: String,
         force: bool,
+    ) -> BoxFuture<'_, Result<()>>;
+
+    fn merge(
+        &self,
+        branch: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<MergeOutcome>>;
+
+    fn cherry_pick(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<MergeOutcome>>;
+
+    fn abort_merge(&self, env: Arc<HashMap<String, String>>) -> BoxFuture<'_, Result<()>>;
+
+    /// `commits` are newest first and must be next to each other on the current branch.
+    fn squash_commits(
+        &self,
+        commits: Vec<String>,
+        message: String,
+        env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>>;
 
     fn worktrees(&self) -> BoxFuture<'_, Result<Vec<Worktree>>>;
@@ -1197,6 +1229,7 @@ pub struct RealGitRepository {
     pub system_git_binary_path: Option<PathBuf>,
     pub any_git_binary_path: PathBuf,
     any_git_binary_help_output: Arc<Mutex<Option<SharedString>>>,
+    untracked_diff_stat_cache: Arc<Mutex<UntrackedDiffStatCache>>,
     executor: BackgroundExecutor,
     is_trusted: Arc<AtomicBool>,
 }
@@ -1287,6 +1320,7 @@ impl RealGitRepository {
             any_git_binary_path,
             executor,
             any_git_binary_help_output: Arc::new(Mutex::new(None)),
+            untracked_diff_stat_cache: Arc::default(),
             is_trusted: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -1301,6 +1335,77 @@ impl RealGitRepository {
         self.working_directory
             .clone()
             .unwrap_or_else(|| self.git_dir.clone())
+    }
+
+    fn run_merge_command(
+        &self,
+        args: Vec<String>,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<MergeOutcome>> {
+        let git = self.git_binary_in_worktree();
+        let git_dir = self.path();
+        self.executor
+            .spawn(async move {
+                let git = git?;
+                anyhow::ensure!(
+                    !operation_in_progress(&git_dir),
+                    "Finish or abort the merge, cherry-pick or rebase in progress first"
+                );
+                anyhow::ensure!(
+                    !has_conflicted_paths(&git).await?,
+                    "Resolve the conflicted files first"
+                );
+                if let [subcommand, commit] = &args[..]
+                    && subcommand == "cherry-pick"
+                    && git
+                        .run(&["merge-base", "--is-ancestor", commit, "HEAD"])
+                        .await
+                        .is_ok()
+                {
+                    bail!("This commit is already on the current branch");
+                }
+                let head_before = git.run(&["rev-parse", "HEAD"]).await.ok();
+
+                let output = git.build_command(&args).envs(env.iter()).output().await?;
+                if output.status.success() {
+                    if operation_in_progress(&git_dir) {
+                        return Ok(MergeOutcome::ReadyToCommit);
+                    }
+                    let head_after = git.run(&["rev-parse", "HEAD"]).await.ok();
+                    return Ok(if head_after == head_before {
+                        MergeOutcome::AlreadyUpToDate
+                    } else {
+                        MergeOutcome::Completed
+                    });
+                }
+                if has_conflicted_paths(&git).await? {
+                    return Ok(MergeOutcome::StoppedOnConflicts);
+                }
+                if operation_in_progress(&git_dir) {
+                    let nothing_staged = git
+                        .run(&["diff", "--cached", "--quiet", "HEAD"])
+                        .await
+                        .is_ok();
+                    if !nothing_staged {
+                        return Ok(MergeOutcome::ReadyToCommit);
+                    }
+                    abort_merge_in_progress(&git, &git_dir, &env).await?;
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let message = if stderr.trim().is_empty() {
+                    stdout
+                } else {
+                    stderr
+                };
+                let message = message
+                    .lines()
+                    .filter(|line| !line.starts_with("hint:"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                bail!("{}", message.trim())
+            })
+            .boxed()
     }
 
     fn git_binary_in_worktree(&self) -> Result<GitBinary> {
@@ -2488,6 +2593,50 @@ impl GitRepository for RealGitRepository {
             .boxed()
     }
 
+    fn merge(
+        &self,
+        branch: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<MergeOutcome>> {
+        self.run_merge_command(vec!["merge".into(), "--no-edit".into(), branch], env)
+    }
+
+    fn cherry_pick(
+        &self,
+        commit: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<MergeOutcome>> {
+        self.run_merge_command(vec!["cherry-pick".into(), commit], env)
+    }
+
+    fn abort_merge(&self, env: Arc<HashMap<String, String>>) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        let git_dir = self.path();
+        self.executor
+            .spawn(async move {
+                let git = git?;
+                anyhow::ensure!(
+                    abort_merge_in_progress(&git, &git_dir, &env).await?,
+                    "No merge or cherry-pick is in progress"
+                );
+                Ok(())
+            })
+            .boxed()
+    }
+
+    fn squash_commits(
+        &self,
+        commits: Vec<String>,
+        message: String,
+        env: Arc<HashMap<String, String>>,
+    ) -> BoxFuture<'_, Result<()>> {
+        let git = self.git_binary_in_worktree();
+        let git_dir = self.path();
+        self.executor
+            .spawn(async move { squash_commits(&git?, &git_dir, commits, message, &env).await })
+            .boxed()
+    }
+
     fn blame(
         &self,
         path: RepoPath,
@@ -2554,6 +2703,7 @@ impl GitRepository for RealGitRepository {
         let path_prefixes = path_prefixes.to_vec();
         let git_binary = self.git_binary_in_worktree();
         let working_directory = self.working_directory();
+        let untracked_diff_stat_cache = self.untracked_diff_stat_cache.clone();
 
         self.executor
             .spawn(async move {
@@ -2562,8 +2712,13 @@ impl GitRepository for RealGitRepository {
                 if diff == DiffStatType::HeadToIndex {
                     return Ok(stat);
                 }
-                let untracked =
-                    untracked_diff_stats(&git_binary, &working_directory?, &path_prefixes).await?;
+                let untracked = untracked_diff_stats(
+                    &git_binary,
+                    &working_directory?,
+                    &path_prefixes,
+                    &untracked_diff_stat_cache,
+                )
+                .await?;
                 Ok(crate::status::merge_untracked_stats(&stat, &untracked))
             })
             .boxed()
@@ -2576,6 +2731,7 @@ impl GitRepository for RealGitRepository {
         let path_prefixes = path_prefixes.to_vec();
         let git_binary = self.git_binary_in_worktree();
         let working_directory = self.working_directory();
+        let untracked_diff_stat_cache = self.untracked_diff_stat_cache.clone();
 
         self.executor
             .spawn(async move {
@@ -2586,7 +2742,12 @@ impl GitRepository for RealGitRepository {
                         numstat(&git_binary, DiffStatType::HeadToWorktree, &path_prefixes),
                         numstat(&git_binary, DiffStatType::HeadToIndex, &path_prefixes),
                         numstat(&git_binary, DiffStatType::IndexToWorktree, &path_prefixes),
-                        untracked_diff_stats(&git_binary, &working_directory, &path_prefixes),
+                        untracked_diff_stats(
+                            &git_binary,
+                            &working_directory,
+                            &path_prefixes,
+                            &untracked_diff_stat_cache,
+                        ),
                     )
                     .await?;
                 Ok(crate::status::GitDiffStats {
@@ -3430,7 +3591,13 @@ impl GitRepository for RealGitRepository {
 
         async move {
             let log_source_args = log_source.get_args();
-            let mut git_log_command = vec!["log", GRAPH_COMMIT_FORMAT, log_order.as_arg()];
+            // A `log.decorate=full` config would otherwise print `refs/heads/...` names.
+            let mut git_log_command = vec![
+                "log",
+                "--decorate=short",
+                GRAPH_COMMIT_FORMAT,
+                log_order.as_arg(),
+            ];
             git_log_command.extend(log_source_args.iter().map(|arg| arg.as_ref()));
             let mut command = git.build_command(&git_log_command);
             command.stdout(Stdio::piped());
@@ -3799,7 +3966,44 @@ fn parse_initial_graph_output<'a>(
 }
 
 const MAX_UNTRACKED_DIFF_STAT_FILE_SIZE: u64 = 2 * 1024 * 1024;
+const MAX_UNTRACKED_DIFF_STAT_FILES_READ_PER_SCAN: usize = 1000;
+const MAX_UNTRACKED_DIFF_STAT_BYTES_READ_PER_SCAN: u64 = 32 * 1024 * 1024;
 const BINARY_CHECK_LENGTH: usize = 8000;
+
+#[derive(Default)]
+struct UntrackedDiffStatCache {
+    entries: HashMap<RepoPath, CachedUntrackedDiffStat>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedUntrackedDiffStat {
+    modified_at: SystemTime,
+    size: u64,
+    diff_stat: Option<crate::status::DiffStat>,
+}
+
+struct UntrackedDiffStatBudget {
+    files: usize,
+    bytes: u64,
+}
+
+impl UntrackedDiffStatBudget {
+    fn per_scan() -> Self {
+        Self {
+            files: MAX_UNTRACKED_DIFF_STAT_FILES_READ_PER_SCAN,
+            bytes: MAX_UNTRACKED_DIFF_STAT_BYTES_READ_PER_SCAN,
+        }
+    }
+
+    fn try_spend(&mut self, file_size: u64) -> bool {
+        if self.files == 0 || self.bytes < file_size {
+            return false;
+        }
+        self.files -= 1;
+        self.bytes -= file_size;
+        true
+    }
+}
 
 async fn numstat(
     git_binary: &GitBinary,
@@ -3835,6 +4039,7 @@ async fn untracked_diff_stats(
     git_binary: &GitBinary,
     working_directory: &Path,
     path_prefixes: &[RepoPath],
+    cache: &Mutex<UntrackedDiffStatCache>,
 ) -> Result<Vec<(RepoPath, crate::status::DiffStat)>> {
     let mut args: Vec<String> = vec![
         "ls-files".into(),
@@ -3851,18 +4056,26 @@ async fn untracked_diff_stats(
         );
     }
     let output = git_binary.run_lossy(&args).await?;
+    let mut budget = UntrackedDiffStatBudget::per_scan();
+    let mut listed_paths = HashSet::new();
     let mut entries = Vec::new();
     for path in output.split('\0').filter(|path| !path.is_empty()) {
         let Ok(repo_path) = RepoPath::new(path) else {
             continue;
         };
         let absolute_path = working_directory.join(repo_path.as_std_path());
-        match untracked_file_diff_stat(&absolute_path).await {
-            Ok(Some(stat)) => entries.push((repo_path, stat)),
+        match untracked_file_diff_stat(&repo_path, &absolute_path, cache, &mut budget).await {
+            Ok(Some(stat)) => entries.push((repo_path.clone(), stat)),
             Ok(None) => {}
             Err(error) => log::debug!("failed to read untracked file {absolute_path:?}: {error:#}"),
         }
+        listed_paths.insert(repo_path);
     }
+    cache.lock().entries.retain(|path, _| {
+        let was_scanned =
+            path_prefixes.is_empty() || path_prefixes.iter().any(|prefix| path.starts_with(prefix));
+        !was_scanned || listed_paths.contains(path)
+    });
     entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
     entries.dedup_by(|(a, _), (b, _)| a == b);
     Ok(entries)
@@ -3872,9 +4085,15 @@ async fn untracked_diff_stats(
 /// counts for: directories, binary files, and files too large to be worth
 /// scanning on every refresh. Git stores a symlink as a blob holding the
 /// target path, so numstat reports one added line for it regardless of the
-/// target.
-async fn untracked_file_diff_stat(path: &Path) -> Result<Option<crate::status::DiffStat>> {
-    let metadata = smol::fs::symlink_metadata(path).await?;
+/// target. Also returns `None` for a changed file once `budget` is spent; a
+/// later scan counts it.
+async fn untracked_file_diff_stat(
+    repo_path: &RepoPath,
+    absolute_path: &Path,
+    cache: &Mutex<UntrackedDiffStatCache>,
+    budget: &mut UntrackedDiffStatBudget,
+) -> Result<Option<crate::status::DiffStat>> {
+    let metadata = smol::fs::symlink_metadata(absolute_path).await?;
     if metadata.is_symlink() {
         return Ok(Some(crate::status::DiffStat {
             added: 1,
@@ -3884,6 +4103,33 @@ async fn untracked_file_diff_stat(path: &Path) -> Result<Option<crate::status::D
     if !metadata.is_file() || metadata.len() > MAX_UNTRACKED_DIFF_STAT_FILE_SIZE {
         return Ok(None);
     }
+    let size = metadata.len();
+    let modified_at = metadata.modified().ok();
+    let cached = cache.lock().entries.get(repo_path).copied();
+    if let Some(cached) = cached
+        && Some(cached.modified_at) == modified_at
+        && cached.size == size
+    {
+        return Ok(cached.diff_stat);
+    }
+    if !budget.try_spend(size) {
+        return Ok(None);
+    }
+    let diff_stat = count_untracked_file_lines(absolute_path).await?;
+    if let Some(modified_at) = modified_at {
+        cache.lock().entries.insert(
+            repo_path.clone(),
+            CachedUntrackedDiffStat {
+                modified_at,
+                size,
+                diff_stat,
+            },
+        );
+    }
+    Ok(diff_stat)
+}
+
+async fn count_untracked_file_lines(path: &Path) -> Result<Option<crate::status::DiffStat>> {
     let mut file = smol::fs::File::open(path).await?;
     let mut buffer = [0u8; 8192];
     let mut bytes_checked_for_binary = 0;
@@ -4212,6 +4458,222 @@ struct GitBinaryCommandError {
     stdout: String,
     stderr: String,
     status: ExitStatus,
+}
+
+async fn has_conflicted_paths(git: &GitBinary) -> Result<bool> {
+    let paths = git.run(&["diff", "--name-only", "--diff-filter=U"]).await?;
+    Ok(!paths.is_empty())
+}
+
+fn operation_in_progress(git_dir: &Path) -> bool {
+    [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "sequencer",
+        REBASE_MERGE_DIR,
+        REBASE_APPLY_DIR,
+    ]
+    .iter()
+    .any(|name| git_dir.join(name).exists())
+}
+
+async fn squash_commits(
+    git: &GitBinary,
+    git_dir: &Path,
+    commits: Vec<String>,
+    message: String,
+    env: &HashMap<String, String>,
+) -> Result<()> {
+    anyhow::ensure!(commits.len() >= 2, "Select at least two commits to squash");
+    let message = message.trim().to_string();
+    anyhow::ensure!(!message.is_empty(), "The commit message can't be empty");
+    anyhow::ensure!(
+        !operation_in_progress(git_dir),
+        "Finish or abort the merge, cherry-pick or rebase in progress first"
+    );
+
+    let mut selected = Vec::with_capacity(commits.len());
+    for commit in commits.iter().rev() {
+        selected.push(
+            git.run(&["rev-parse", "--verify", &format!("{commit}^{{commit}}")])
+                .await?,
+        );
+    }
+    let oldest = &selected[0];
+
+    let pushed_to = git
+        .run(&[
+            "for-each-ref",
+            "--contains",
+            oldest,
+            "--format=%(refname:short)",
+            "refs/remotes",
+        ])
+        .await?;
+    if let Some(remote_branch) = pushed_to.lines().next() {
+        bail!(
+            "These commits are already on {remote_branch}. Squashing them would need a force push."
+        );
+    }
+
+    let oldest_parents = git
+        .run(&["rev-list", "--parents", "-n", "1", oldest])
+        .await?;
+    let oldest_parents = oldest_parents
+        .split_whitespace()
+        .skip(1)
+        .collect::<Vec<_>>();
+    let base = match oldest_parents[..] {
+        [] if git.run(&["rev-parse", "--is-shallow-repository"]).await? == "true" => {
+            bail!(
+                "This clone doesn't have the full history. Fetch it first to squash these commits."
+            )
+        }
+        [] => None,
+        [parent] => Some(parent.to_string()),
+        _ => bail!("Merge commits can't be squashed"),
+    };
+    let range = match &base {
+        Some(base) => format!("{base}..HEAD"),
+        None => "HEAD".to_string(),
+    };
+    let mut chain = Vec::new();
+    let mut expected_parent = base.clone();
+    for line in git
+        .run(&["rev-list", "--parents", "--reverse", &range])
+        .await?
+        .lines()
+    {
+        let mut shas = line.split_whitespace().map(str::to_string);
+        let Some(sha) = shas.next() else {
+            continue;
+        };
+        let parents = shas.collect::<Vec<_>>();
+        anyhow::ensure!(
+            parents.len() <= 1,
+            "There's a merge commit after these commits, so they can't be squashed"
+        );
+        anyhow::ensure!(
+            parents.first() == expected_parent.as_ref(),
+            "Only commits on the current branch can be squashed"
+        );
+        expected_parent = Some(sha.clone());
+        chain.push(sha);
+    }
+    anyhow::ensure!(
+        chain.starts_with(&selected),
+        "Only commits next to each other on the current branch can be squashed"
+    );
+
+    let head = chain.last().context("The current branch has no commits")?;
+    let sign = git
+        .run(&["config", "--bool", "commit.gpgsign"])
+        .await
+        .is_ok_and(|value| value == "true");
+    let mut new_head = commit_tree(
+        git,
+        env,
+        &selected[selected.len() - 1],
+        base.as_deref(),
+        oldest,
+        &message,
+        sign,
+    )
+    .await?;
+    for commit in &chain[selected.len()..] {
+        let message = git.run_raw(&["log", "-1", "--format=%B", commit]).await?;
+        new_head = commit_tree(
+            git,
+            env,
+            commit,
+            Some(&new_head),
+            commit,
+            message.trim_end(),
+            sign,
+        )
+        .await?;
+    }
+    git.run(&[
+        "update-ref",
+        "-m",
+        &format!("squash: combine {} commits", selected.len()),
+        "HEAD",
+        &new_head,
+        head,
+    ])
+    .await?;
+    Ok(())
+}
+
+async fn commit_tree(
+    git: &GitBinary,
+    env: &HashMap<String, String>,
+    files_from: &str,
+    parent: Option<&str>,
+    author_from: &str,
+    message: &str,
+    sign: bool,
+) -> Result<String> {
+    let author = git
+        .run(&[
+            "log",
+            "-1",
+            "--format=%an%x00%ae%x00%ad",
+            "--date=raw",
+            author_from,
+        ])
+        .await?;
+    let [name, email, date] = author.split('\0').collect::<Vec<_>>()[..] else {
+        bail!("Couldn't read the author of {author_from}");
+    };
+    let mut args = vec!["commit-tree".to_string(), format!("{files_from}^{{tree}}")];
+    if let Some(parent) = parent {
+        args.extend(["-p".to_string(), parent.to_string()]);
+    }
+    if sign {
+        args.push("-S".to_string());
+    }
+    args.extend(["-m".to_string(), message.to_string()]);
+    let output = git
+        .build_command(&args)
+        .envs(env.iter())
+        .env("GIT_AUTHOR_NAME", name)
+        .env("GIT_AUTHOR_EMAIL", email)
+        .env("GIT_AUTHOR_DATE", date)
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Failed to write the squashed commit:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+async fn abort_merge_in_progress(
+    git: &GitBinary,
+    git_dir: &Path,
+    env: &HashMap<String, String>,
+) -> Result<bool> {
+    let subcommand = if git_dir.join("MERGE_HEAD").exists() {
+        "merge"
+    } else if git_dir.join("CHERRY_PICK_HEAD").exists() {
+        "cherry-pick"
+    } else {
+        return Ok(false);
+    };
+    let output = git
+        .build_command(&[subcommand, "--abort"])
+        .envs(env.iter())
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Failed to abort {subcommand}:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(true)
 }
 
 async fn run_git_command(
@@ -4611,7 +5073,15 @@ mod tests {
     #[test]
     fn test_untracked_file_diff_stat() {
         let dir = tempfile::tempdir().unwrap();
-        let stat = |name: &str| smol::block_on(untracked_file_diff_stat(&dir.path().join(name)));
+        let cache = Mutex::new(UntrackedDiffStatCache::default());
+        let stat = |name: &str| {
+            smol::block_on(untracked_file_diff_stat(
+                &repo_path(name),
+                &dir.path().join(name),
+                &cache,
+                &mut UntrackedDiffStatBudget::per_scan(),
+            ))
+        };
         let lines = |added| Some(crate::status::DiffStat { added, deleted: 0 });
 
         fs::write(dir.path().join("no_newline.txt"), "bb").unwrap();
@@ -4649,6 +5119,123 @@ mod tests {
             assert_eq!(stat("dangling").unwrap(), lines(1));
             assert_eq!(stat("dir_link").unwrap(), lines(1));
         }
+    }
+
+    #[test]
+    fn test_untracked_file_diff_stat_cache_and_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Mutex::new(UntrackedDiffStatCache::default());
+        let stat = |name: &str, budget: &mut UntrackedDiffStatBudget| {
+            smol::block_on(untracked_file_diff_stat(
+                &repo_path(name),
+                &dir.path().join(name),
+                &cache,
+                budget,
+            ))
+            .unwrap()
+        };
+        let lines = |added| Some(crate::status::DiffStat { added, deleted: 0 });
+        let mut budget = UntrackedDiffStatBudget { files: 2, bytes: 6 };
+
+        fs::write(dir.path().join("first.txt"), "a\nb\n").unwrap();
+        fs::write(dir.path().join("second.txt"), "a\n").unwrap();
+        fs::write(dir.path().join("third.txt"), "a\n").unwrap();
+        fs::write(dir.path().join("binary.dat"), b"a\0b\n").unwrap();
+
+        assert_eq!(stat("first.txt", &mut budget), lines(2));
+        assert_eq!(budget.files, 1);
+        assert_eq!(budget.bytes, 2);
+
+        cache
+            .lock()
+            .entries
+            .get_mut(&repo_path("first.txt"))
+            .unwrap()
+            .diff_stat = lines(99);
+        assert_eq!(stat("first.txt", &mut budget), lines(99));
+        assert_eq!(budget.files, 1);
+        assert_eq!(budget.bytes, 2);
+
+        assert_eq!(stat("binary.dat", &mut budget), None);
+        assert!(!cache.lock().entries.contains_key(&repo_path("binary.dat")));
+        assert_eq!(budget.bytes, 2);
+
+        assert_eq!(stat("second.txt", &mut budget), lines(1));
+        assert_eq!(budget.files, 0);
+        assert_eq!(stat("third.txt", &mut budget), None);
+        assert!(!cache.lock().entries.contains_key(&repo_path("third.txt")));
+        assert_eq!(stat("second.txt", &mut budget), lines(1));
+
+        let mut budget = UntrackedDiffStatBudget::per_scan();
+        assert_eq!(stat("third.txt", &mut budget), lines(1));
+        assert_eq!(stat("binary.dat", &mut budget), None);
+        assert!(cache.lock().entries.contains_key(&repo_path("binary.dat")));
+
+        fs::write(dir.path().join("first.txt"), "a\nb\nc\n").unwrap();
+        assert_eq!(stat("first.txt", &mut budget), lines(3));
+    }
+
+    #[gpui::test]
+    async fn test_diff_stats_caches_untracked_files(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        fs::write(repo_dir.path().join("tracked.txt"), "base\n").unwrap();
+        git_command(repo_dir.path(), ["add", "tracked.txt"]);
+        git_command(repo_dir.path(), ["commit", "-m", "base"]);
+        fs::write(repo_dir.path().join("new.txt"), "a\nb\n").unwrap();
+        fs::create_dir(repo_dir.path().join("dir")).unwrap();
+        fs::write(repo_dir.path().join("dir/other.txt"), "a\n").unwrap();
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+        let untracked_stats = |stats: crate::status::GitDiffStats| {
+            stats
+                .head_to_worktree
+                .entries
+                .iter()
+                .map(|(path, stat)| (path.as_unix_str().to_string(), stat.added))
+                .collect::<Vec<_>>()
+        };
+        let cached_paths = |repository: &RealGitRepository| {
+            let mut paths = repository
+                .untracked_diff_stat_cache
+                .lock()
+                .entries
+                .keys()
+                .map(|path| path.as_unix_str().to_string())
+                .collect::<Vec<_>>();
+            paths.sort();
+            paths
+        };
+
+        assert_eq!(
+            untracked_stats(repository.diff_stats(&[]).await.unwrap()),
+            [("dir/other.txt".to_string(), 1), ("new.txt".to_string(), 2)]
+        );
+        assert_eq!(cached_paths(&repository), ["dir/other.txt", "new.txt"]);
+
+        fs::remove_file(repo_dir.path().join("dir/other.txt")).unwrap();
+        fs::write(repo_dir.path().join("new.txt"), "a\nb\nc\n").unwrap();
+        assert!(
+            untracked_stats(repository.diff_stats(&[repo_path("dir")]).await.unwrap()).is_empty()
+        );
+        assert_eq!(cached_paths(&repository), ["new.txt"]);
+
+        assert_eq!(
+            untracked_stats(repository.diff_stats(&[]).await.unwrap()),
+            [("new.txt".to_string(), 3)]
+        );
+        git_command(repo_dir.path(), ["add", "new.txt"]);
+        repository.diff_stats(&[]).await.unwrap();
+        assert_eq!(cached_paths(&repository), Vec::<String>::new());
     }
 
     #[gpui::test]
@@ -4856,6 +5443,56 @@ mod tests {
                     RepoPath::new("file.txt").unwrap(),
                     TreeDiffStatus::Modified { old: base_oid },
                 )]),
+            }
+        );
+    }
+
+    #[gpui::test]
+    async fn test_diff_tree_lists_root_commit_files_against_empty_tree(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        fs::create_dir(repo_dir.path().join("src")).unwrap();
+        fs::write(repo_dir.path().join("README.md"), "readme\n").unwrap();
+        fs::write(repo_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        git_command(repo_dir.path(), ["add", "."]);
+        git_command(repo_dir.path(), ["commit", "-m", "root"]);
+        let root_sha: Oid = git_command_output(repo_dir.path(), ["rev-parse", "HEAD"])
+            .parse()
+            .unwrap();
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+
+        assert!(
+            repository
+                .diff_tree(DiffTreeType::Since {
+                    base: format!("{root_sha}^").into(),
+                    head: root_sha.to_string().into(),
+                })
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            repository
+                .diff_tree(DiffTreeType::Since {
+                    base: root_sha.empty_tree_id().into(),
+                    head: root_sha.to_string().into(),
+                })
+                .await
+                .unwrap(),
+            TreeDiff {
+                entries: HashMap::from_iter([
+                    (repo_path("README.md"), TreeDiffStatus::Added),
+                    (repo_path("src/main.rs"), TreeDiffStatus::Added),
+                ]),
             }
         );
     }
@@ -5953,6 +6590,156 @@ mod tests {
         //         .ok(),
         //     None
         // );
+    }
+
+    #[gpui::test]
+    async fn test_merge_cherry_pick_and_abort(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        let dir = repo_dir.path();
+        git_init_repo(dir);
+        let commit_file = |name: &str, contents: &str| {
+            fs::write(dir.join(name), contents).unwrap();
+            git_command(dir, ["add", name]);
+            git_command(dir, ["commit", "-m", name]);
+        };
+        commit_file("shared", "base\n");
+        git_command(dir, ["switch", "-c", "feature"]);
+        commit_file("shared", "feature\n");
+        commit_file("extra", "extra\n");
+        let extra_commit = git_command_output(dir, ["rev-parse", "HEAD"])
+            .trim()
+            .to_string();
+        git_command(dir, ["switch", "-c", "clean", "main"]);
+        commit_file("clean", "clean\n");
+        git_command(dir, ["switch", "main"]);
+        commit_file("shared", "main\n");
+
+        let repo =
+            RealGitRepository::new(&dir.join(".git"), None, Some("git".into()), cx.executor())
+                .unwrap();
+        let env = Arc::new(test_commit_envs());
+
+        let outcome = repo.cherry_pick(extra_commit.clone(), env.clone()).await;
+        assert_eq!(outcome.unwrap(), MergeOutcome::Completed);
+        assert_eq!(fs::read_to_string(dir.join("extra")).unwrap(), "extra\n");
+
+        repo.cherry_pick(extra_commit.clone(), env.clone())
+            .await
+            .expect_err("picking a commit whose changes are already applied should fail");
+        assert!(!dir.join(".git/CHERRY_PICK_HEAD").exists());
+        repo.cherry_pick("HEAD~1".into(), env.clone())
+            .await
+            .expect_err("picking a commit already on the branch should fail");
+
+        let outcome = repo.merge("clean".into(), env.clone()).await;
+        assert_eq!(outcome.unwrap(), MergeOutcome::Completed);
+        assert_eq!(fs::read_to_string(dir.join("clean")).unwrap(), "clean\n");
+        let outcome = repo.merge("clean".into(), env.clone()).await;
+        assert_eq!(outcome.unwrap(), MergeOutcome::AlreadyUpToDate);
+
+        let outcome = repo.merge("feature".into(), env.clone()).await;
+        assert_eq!(outcome.unwrap(), MergeOutcome::StoppedOnConflicts);
+        assert!(dir.join(".git/MERGE_HEAD").exists());
+
+        fs::write(dir.join("shared"), "resolved\n").unwrap();
+        git_command(dir, ["add", "shared"]);
+        repo.cherry_pick(extra_commit, env.clone())
+            .await
+            .expect_err("a merge in progress should block cherry-picking");
+        repo.merge("clean".into(), env.clone())
+            .await
+            .expect_err("a merge in progress should block merging");
+        assert!(dir.join(".git/MERGE_HEAD").exists());
+        assert_eq!(
+            fs::read_to_string(dir.join("shared")).unwrap(),
+            "resolved\n"
+        );
+
+        repo.abort_merge(env.clone()).await.unwrap();
+        assert!(!dir.join(".git/MERGE_HEAD").exists());
+        assert_eq!(fs::read_to_string(dir.join("shared")).unwrap(), "main\n");
+        repo.abort_merge(env.clone())
+            .await
+            .expect_err("aborting with nothing in progress should fail");
+
+        git_command(dir, ["switch", "-c", "late", "main~3"]);
+        commit_file("late", "late\n");
+        git_command(dir, ["switch", "main"]);
+        git_command(dir, ["config", "branch.main.mergeOptions", "--no-commit"]);
+        let outcome = repo.merge("late".into(), env.clone()).await;
+        assert_eq!(outcome.unwrap(), MergeOutcome::ReadyToCommit);
+        assert!(dir.join(".git/MERGE_HEAD").exists());
+        repo.abort_merge(env).await.unwrap();
+    }
+
+    #[gpui::test]
+    async fn test_squash_commits(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        let dir = repo_dir.path();
+        git_init_repo(dir);
+        let commit_file = |name: &str, contents: &str, message: &str| {
+            fs::write(dir.join(name), contents).unwrap();
+            git_command(dir, ["add", name]);
+            git_command(dir, ["commit", "-m", message]);
+        };
+        let rev = |revision: &str| {
+            git_command_output(dir, ["rev-parse", revision])
+                .trim()
+                .to_string()
+        };
+        commit_file("a", "1", "first");
+        commit_file("a", "2", "second");
+        commit_file("b", "1", "third");
+        commit_file("a", "3", "fourth");
+        let head_tree = rev("HEAD^{tree}");
+        fs::write(dir.join("a"), "uncommitted").unwrap();
+
+        let repo =
+            RealGitRepository::new(&dir.join(".git"), None, Some("git".into()), cx.executor())
+                .unwrap();
+        let env = Arc::new(test_commit_envs());
+
+        repo.squash_commits(vec![rev("HEAD"), rev("HEAD~2")], "x".into(), env.clone())
+            .await
+            .expect_err("commits that aren't next to each other can't be squashed");
+
+        repo.squash_commits(
+            vec![rev("HEAD~1"), rev("HEAD~2")],
+            "second and third".into(),
+            env.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            git_command_output(dir, ["rev-list", "--count", "HEAD"]).trim(),
+            "3"
+        );
+        assert_eq!(rev("HEAD^{tree}"), head_tree);
+        let subjects = git_command_output(dir, ["log", "--format=%s"]);
+        assert_eq!(
+            subjects.lines().collect::<Vec<_>>(),
+            ["fourth", "second and third", "first"]
+        );
+        assert_eq!(fs::read_to_string(dir.join("a")).unwrap(), "uncommitted");
+
+        git_command(dir, ["update-ref", "refs/remotes/origin/main", "HEAD~1"]);
+        repo.squash_commits(vec![rev("HEAD"), rev("HEAD~1")], "x".into(), env.clone())
+            .await
+            .expect_err("pushed commits can't be squashed");
+        git_command(dir, ["update-ref", "-d", "refs/remotes/origin/main"]);
+
+        repo.squash_commits(vec![rev("HEAD~1"), rev("HEAD~2")], "root".into(), env)
+            .await
+            .unwrap();
+        let subjects = git_command_output(dir, ["log", "--format=%s"]);
+        assert_eq!(subjects.lines().collect::<Vec<_>>(), ["fourth", "root"]);
+        assert_eq!(rev("HEAD^{tree}"), head_tree);
     }
 
     #[cfg(unix)]

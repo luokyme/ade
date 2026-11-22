@@ -1,8 +1,8 @@
 use super::{ChatView, ui};
 use crate::{
-    AcceptCommand, AgentKind, DismissCommands, NewClaudeChat, NewCodexChat, NewOpencodeChat,
-    SelectNextCommand, SelectPreviousCommand, Send, ToggleFocus,
-    chat_style::{MENU_ITEM_RADIUS, icon, ink, popover_card, selected_row},
+    AcceptCommand, AgentKind, DismissCommands, NewAntigravityChat, NewClaudeChat, NewCodexChat,
+    NewOpencodeChat, SelectNextCommand, SelectPreviousCommand, Send, ToggleFocus,
+    chat_style::{MENU_ITEM_RADIUS, icon, ink, popover_card, selected_row, working_animation},
     slash_commands::{
         AppCommand, CommandItem, CommandTarget, CommandToken, TokenKind, command_items,
         completion_token, filter_commands,
@@ -12,8 +12,8 @@ use agent_harness::SkillRef;
 use editor::{FoldPlaceholder, MultiBufferOffset, SelectionEffects, display_map::Crease};
 use file_icons::FileIcons;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Context, Corners, Focusable as _, FontWeight,
-    Hsla, IntoElement, ParentElement, SharedString, Styled, Window, canvas, deferred, div,
+    AnimationExt as _, AnyElement, App, Context, Corners, Focusable as _, FontWeight, Hsla,
+    IntoElement, ParentElement, SharedString, Styled, Window, canvas, deferred, div,
     pulsating_between, px, relative,
 };
 use i18n::t;
@@ -634,6 +634,7 @@ impl ChatView {
                 AgentKind::Claude => window.dispatch_action(Box::new(NewClaudeChat), cx),
                 AgentKind::Codex => window.dispatch_action(Box::new(NewCodexChat), cx),
                 AgentKind::Opencode => window.dispatch_action(Box::new(NewOpencodeChat), cx),
+                AgentKind::Antigravity => window.dispatch_action(Box::new(NewAntigravityChat), cx),
             },
             AppCommand::Resume => window.dispatch_action(Box::new(ToggleFocus), cx),
             AppCommand::Stop => self.session.update(cx, |session, cx| session.stop(cx)),
@@ -812,8 +813,7 @@ impl ChatView {
                                 .bg(ink(0.04, cx))
                                 .with_animation(
                                     ("agent-completion-skeleton", index),
-                                    Animation::new(Duration::from_millis(1400))
-                                        .repeat()
+                                    working_animation(Duration::from_millis(1400))
                                         .with_easing(pulsating_between(0.35, 0.75)),
                                     |this, delta| this.opacity(delta),
                                 )

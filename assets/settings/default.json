@@ -131,12 +131,14 @@
       "claude_code": "bypass",
       "codex": "full_access",
       "opencode": "full_access",
+      "antigravity": "auto",
     },
     // Agents shown in the new chat menu and in Continue Saved Chat.
     "agents": {
       "claude_code": true,
       "codex": true,
       "opencode": true,
+      "antigravity": true,
     },
     // "queue" waits for the agent to finish; "steer" sends the message right away.
     "while_working": "queue",
@@ -147,7 +149,7 @@
     "claude_in_chrome": true,
     // How the Git panel writes commit messages.
     "commit_message": {
-      // "claude_code", "codex" or "opencode". When unset, the first installed agent.
+      // "claude_code", "codex", "opencode" or "antigravity". When unset, the first installed agent.
       "agent": null,
       // When unset, a small, fast model.
       "model": null,
@@ -1130,6 +1132,11 @@
     // Choices: project_diff, file_diff, view_file
     // Default: file_diff
     "entry_primary_click_action": "file_diff",
+    // How commits are shown in the Git panel's History section.
+    //
+    // Choices: detailed, graph
+    // Default: detailed
+    "history_style": "detailed",
   },
   // Whether the screen sharing icon is shown in the os status bar.
   "show_call_status_icon": true,

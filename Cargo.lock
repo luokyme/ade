@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "ade"
-version = "1.2.2"
+version = "1.5.0"
 dependencies = [
  "activity_indicator",
  "ade_actions",
@@ -7062,6 +7062,7 @@ dependencies = [
  "language",
  "log",
  "markdown",
+ "mermaid_render",
  "project",
  "serde_json",
  "settings",
@@ -7202,9 +7203,13 @@ dependencies = [
 name = "mermaid_render"
 version = "0.1.0"
 dependencies = [
+ "collections",
+ "gpui",
+ "i18n",
  "mermaid-rs-renderer",
  "thiserror 2.0.17",
  "usvg",
+ "util",
 ]
 
 [[package]]
@@ -16037,6 +16042,9 @@ dependencies = [
  "clap",
  "indoc",
  "regex",
+ "resvg",
+ "serde",
+ "serde_json_lenient",
  "toml 0.8.23",
  "toml_edit 0.22.27",
 ]

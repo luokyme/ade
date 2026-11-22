@@ -72,7 +72,7 @@ fn tool_name_label(name: &str) -> String {
     .to_string()
 }
 
-pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
+pub fn tool_group_summary(tools: &[(&crate::ToolCall, bool)]) -> String {
     use crate::ToolCall;
     let mut commands = 0usize;
     let mut edited: Vec<&str> = Vec::new();
@@ -82,8 +82,8 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut todos = 0usize;
     let mut other = 0usize;
     let mut failed = 0usize;
-    for (call, is_error) in tools {
-        if *is_error {
+    for &(call, is_error) in tools {
+        if is_error {
             failed += 1;
         }
         match call {
@@ -274,7 +274,9 @@ pub fn permission_label(mode: crate::PermissionMode, harness: crate::HarnessId) 
         PermissionMode::ApproveForMe => t!("Approve for me"),
         PermissionMode::FullAccess => match harness {
             crate::HarnessId::ClaudeCode => t!("Bypass"),
-            crate::HarnessId::Codex | crate::HarnessId::Opencode => t!("Full access"),
+            crate::HarnessId::Codex
+            | crate::HarnessId::Opencode
+            | crate::HarnessId::Antigravity => t!("Full access"),
         },
     }
 }
@@ -296,12 +298,17 @@ pub fn permission_description(
         (PermissionMode::Auto, HarnessId::Opencode) => {
             t!("Follows your OpenCode permission settings")
         }
+        (PermissionMode::Auto, HarnessId::Antigravity) => {
+            t!("Approves edits and safe commands, asks before risky ones")
+        }
         (PermissionMode::DontAsk, _) => t!("Never asks, denies anything not already allowed"),
         (PermissionMode::ReadOnly, _) => t!("Reads files, asks before changing anything"),
         (PermissionMode::ApproveForMe, _) => t!("An automatic reviewer answers approval requests"),
         (PermissionMode::FullAccess, HarnessId::ClaudeCode) => t!("Skips every permission check"),
         (PermissionMode::FullAccess, HarnessId::Codex) => t!("No sandbox and no approval requests"),
-        (PermissionMode::FullAccess, HarnessId::Opencode) => t!("Never asks for permission"),
+        (PermissionMode::FullAccess, HarnessId::Opencode | HarnessId::Antigravity) => {
+            t!("Never asks for permission")
+        }
     }
 }
 

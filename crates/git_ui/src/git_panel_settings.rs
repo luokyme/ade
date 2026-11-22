@@ -3,7 +3,7 @@ use gpui::Pixels;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{
-    FolderIndicator, GitPanelClickBehavior, GitPanelSortBy, IntoGpui,
+    FolderIndicator, GitPanelClickBehavior, GitPanelHistoryStyle, GitPanelSortBy, IntoGpui,
     RegisterSetting, Settings, StatusStyle,
 };
 use ui::scrollbars::{ScrollbarVisibility, ShowScrollbar};
@@ -32,6 +32,7 @@ pub struct GitPanelSettings {
     pub starts_open: bool,
     pub commit_title_max_length: usize,
     pub entry_primary_click_action: GitPanelClickBehavior,
+    pub history_style: GitPanelHistoryStyle,
 }
 
 #[derive(Default)]
@@ -80,6 +81,7 @@ impl Settings for GitPanelSettings {
             starts_open: git_panel.starts_open.unwrap(),
             commit_title_max_length: git_panel.commit_title_max_length.unwrap(),
             entry_primary_click_action: git_panel.entry_primary_click_action.unwrap(),
+            history_style: git_panel.history_style.unwrap(),
         }
     }
 }

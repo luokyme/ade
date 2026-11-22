@@ -1,29 +1,10 @@
 use super::ChatView;
 use crate::chat_style::{accent, ink, page, text_faint};
-use gpui::{App, Context, Hsla, Image, ImageFormat, Rgba};
-use i18n::t;
-use mermaid_render::{DiagramTheme, RenderError};
+use collections::HashSet;
+use gpui::{App, Context, ImageSource, Window};
+use mermaid_render::{Diagram, DiagramTheme};
 use std::{ops::Range, sync::Arc};
 use theme::ActiveTheme as _;
-use util::ResultExt as _;
-
-const MAX_DIAGRAMS: usize = 64;
-
-#[derive(Clone)]
-pub(super) enum Diagram {
-    Pending,
-    Ready {
-        image: Arc<Image>,
-        width: f32,
-        height: f32,
-    },
-    Failed(String),
-}
-
-fn rgba(color: Hsla) -> mermaid_render::Rgba {
-    let Rgba { r, g, b, a } = color.to_rgb();
-    mermaid_render::Rgba { r, g, b, a }
-}
 
 pub(super) fn diagram_theme(cx: &App) -> DiagramTheme {
     let colors = cx.theme().colors();
@@ -38,12 +19,12 @@ pub(super) fn diagram_theme(cx: &App) -> DiagramTheme {
     let border_strong = ink(if is_light { 0.17 } else { 0.14 }, cx);
     DiagramTheme {
         font_family: "Inter".into(),
-        background: rgba(canvas),
-        text: rgba(colors.text),
-        line: rgba(text_faint(cx)),
-        node_fill: rgba(node),
-        node_border: rgba(border_strong),
-        accent: rgba(accent(cx)),
+        background: canvas.into(),
+        text: colors.text.into(),
+        line: text_faint(cx).into(),
+        node_fill: node.into(),
+        node_border: border_strong.into(),
+        accent: accent(cx).into(),
     }
 }
 
@@ -84,29 +65,95 @@ pub(super) fn mermaid_blocks(markdown: &str) -> Vec<(Range<usize>, String)> {
 }
 
 impl ChatView {
-    pub(super) fn request_visible_diagrams(&mut self, cx: &mut Context<Self>) {
-        let dark = !cx.theme().appearance.is_light();
-        if self.diagram_scan.0 != Some(dark) {
-            self.diagram_scan = (Some(dark), Default::default());
+    pub(super) fn refresh_diagrams(&mut self, cx: &mut Context<Self>) {
+        if self
+            .diagram_theme
+            .as_ref()
+            .is_some_and(|(theme, _)| Arc::ptr_eq(theme, cx.theme()))
+        {
+            return;
         }
-        let mut scanned = Vec::new();
-        let mut sources = Vec::new();
-        for entry in self.entries(cx) {
-            if let crate::session::Entry::Assistant { markdown, .. } = entry {
-                let source = markdown.read(cx).source();
-                let key = (markdown.entity_id(), source.len());
-                if self.diagram_scan.1.get(&key.0) == Some(&key.1) {
-                    continue;
+        let colors = diagram_theme(cx);
+        let same_colors = self
+            .diagram_theme
+            .as_ref()
+            .is_some_and(|(_, known)| *known == colors);
+        self.diagram_theme = Some((cx.theme().clone(), colors));
+        if same_colors {
+            return;
+        }
+        let sources = self
+            .entries(cx)
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::session::Entry::Assistant { markdown, .. } => {
+                    Some(markdown.read(cx).source())
                 }
-                scanned.push(key);
-                if source.contains("```mermaid") {
-                    sources.extend(mermaid_sources(source));
-                }
+                _ => None,
+            })
+            .filter(|source| source.contains("```mermaid"))
+            .flat_map(|source| mermaid_sources(source))
+            .collect();
+        self.request_diagrams(sources, cx);
+    }
+
+    pub(super) fn request_diagrams(&mut self, sources: Vec<String>, cx: &mut Context<Self>) {
+        let Some((_, theme)) = &self.diagram_theme else {
+            return;
+        };
+        if sources.is_empty() {
+            return;
+        }
+        self.diagrams.update(cx, |diagrams, cx| {
+            for source in &sources {
+                diagrams.request(source, theme, cx);
+            }
+        });
+        self.diagram_sources.extend(sources);
+    }
+
+    pub(super) fn release_dropped_diagram_images(&mut self, window: &mut Window, cx: &mut App) {
+        let diagrams = self.diagrams.read(cx);
+        let generation = diagrams.generation();
+        if self.diagram_generation == generation {
+            return;
+        }
+        self.diagram_generation = generation;
+        let kept: HashSet<u64> = self
+            .diagram_sources
+            .iter()
+            .filter_map(|source| match diagrams.get(source) {
+                Some(Diagram::Ready { image, .. }) => Some(image.id()),
+                _ => None,
+            })
+            .collect();
+        let dropped: Vec<u64> = self
+            .diagram_images
+            .keys()
+            .filter(|id| !kept.contains(*id))
+            .copied()
+            .collect();
+        for id in dropped {
+            if let Some(image) = self.diagram_images.remove(&id) {
+                ImageSource::Image(image).evict(Some(&mut *window), cx);
             }
         }
-        self.diagram_scan.1.extend(scanned);
-        for source in sources {
-            self.request_diagram(source, cx);
+    }
+
+    pub(super) fn track_diagram_images(&mut self, cx: &App) {
+        let diagrams = self.diagrams.read(cx);
+        for source in &self.diagram_sources {
+            if let Some(Diagram::Ready { image, .. }) = diagrams.get(source) {
+                self.diagram_images
+                    .entry(image.id())
+                    .or_insert_with(|| image.clone());
+            }
+        }
+    }
+
+    pub(super) fn release_diagram_images(&mut self, cx: &mut App) {
+        for (_, image) in self.diagram_images.drain() {
+            ImageSource::Image(image).evict(None, cx);
         }
     }
 
@@ -114,61 +161,14 @@ impl ChatView {
         if !markdown.contains("```") {
             return Vec::new();
         }
+        let diagrams = self.diagrams.read(cx);
         mermaid_blocks(markdown)
             .into_iter()
             .filter(|(_, source)| {
-                !self.diagram_sources_shown.contains(source.trim_end())
-                    && matches!(self.diagram(source, cx), Some(Diagram::Ready { .. }))
+                !self.diagram_sources_shown.contains(source.trim_end()) && diagrams.is_ready(source)
             })
             .map(|(range, _)| range)
             .collect()
-    }
-
-    pub(super) fn diagram(&self, source: &str, cx: &App) -> Option<Diagram> {
-        let dark = !cx.theme().appearance.is_light();
-        self.diagrams
-            .borrow()
-            .get(&(source.trim_end().to_string(), dark))
-            .cloned()
-    }
-
-    pub(super) fn request_diagram(&mut self, source: String, cx: &mut Context<Self>) {
-        let dark = !cx.theme().appearance.is_light();
-        let key = (source.trim_end().to_string(), dark);
-        if self.diagrams.borrow().contains_key(&key) {
-            return;
-        }
-        if self.diagrams.borrow().len() >= MAX_DIAGRAMS {
-            self.diagrams.borrow_mut().clear();
-            self.diagram_scan.1.clear();
-        }
-        self.diagrams.borrow_mut().insert(key.clone(), Diagram::Pending);
-        let theme = diagram_theme(cx);
-        let key_for_task = key.clone();
-        let task = cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { mermaid_render::render(&source, &theme) })
-                .await;
-            let diagram = match result {
-                Ok(rendered) => Diagram::Ready {
-                    image: Arc::new(Image::from_bytes(ImageFormat::Svg, rendered.svg.to_vec())),
-                    width: rendered.width,
-                    height: rendered.height,
-                },
-                Err(RenderError::TooComplex) => {
-                    Diagram::Failed(t!("This diagram is too large to draw.").to_string())
-                }
-                Err(error) => Diagram::Failed(error.to_string()),
-            };
-            this.update(cx, |this, cx| {
-                this.diagram_tasks.remove(&key);
-                this.diagrams.borrow_mut().insert(key, diagram);
-                cx.notify();
-            })
-            .log_err();
-        });
-        self.diagram_tasks.insert(key_for_task, task);
     }
 }
 

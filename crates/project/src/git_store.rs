@@ -40,9 +40,9 @@ use git::{
         Branch, BranchesScanResult, CommitData, CommitDetails, CommitFileStatus, CommitOptions,
         CreateWorktreeTarget, DiffType, FetchOptions, FileHistoryChangedFileSets,
         GitCommitTemplate, GitRepository, GitRepositoryCheckpoint, InitialGraphCommitData,
-        LogOrder, LogSource, PushOptions, Remote, RemoteCommandOutput, RepoPath, ResetMode,
-        SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree, delete_branch_flag,
-        is_binary_content,
+        LogOrder, LogSource, MergeOutcome, PushOptions, Remote, RemoteCommandOutput, RepoPath,
+        ResetMode, SearchCommitArgs, UpstreamTrackingStatus, Worktree as GitWorktree,
+        delete_branch_flag, is_binary_content,
     },
     stash::{GitStash, StashEntry},
     status::{
@@ -585,6 +585,35 @@ impl sum_tree::KeyedItem for StatusEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RepositoryId(pub u64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbortableMerge {
+    Merge,
+    CherryPick,
+}
+
+fn merge_outcome_to_proto(outcome: MergeOutcome) -> proto::GitMergeResponse {
+    use proto::git_merge_response::Outcome;
+    let outcome = match outcome {
+        MergeOutcome::Completed => Outcome::Completed,
+        MergeOutcome::AlreadyUpToDate => Outcome::AlreadyUpToDate,
+        MergeOutcome::StoppedOnConflicts => Outcome::StoppedOnConflicts,
+        MergeOutcome::ReadyToCommit => Outcome::ReadyToCommit,
+    };
+    proto::GitMergeResponse {
+        outcome: outcome as i32,
+    }
+}
+
+fn merge_outcome_from_proto(response: proto::GitMergeResponse) -> MergeOutcome {
+    use proto::git_merge_response::Outcome;
+    match response.outcome() {
+        Outcome::Completed => MergeOutcome::Completed,
+        Outcome::AlreadyUpToDate => MergeOutcome::AlreadyUpToDate,
+        Outcome::StoppedOnConflicts => MergeOutcome::StoppedOnConflicts,
+        Outcome::ReadyToCommit => MergeOutcome::ReadyToCommit,
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MergeDetails {
     pub merge_heads_by_conflicted_path: TreeMap<RepoPath, Vec<Option<SharedString>>>,
@@ -661,6 +690,8 @@ enum NextCommitDataRequest {
 
 pub struct InitialGitGraphData {
     fetch_task: Task<()>,
+    // Set before `FullyLoaded` is emitted, while `fetch_task` is still running.
+    finished: bool,
     pub error: Option<SharedString>,
     pub commit_data: Vec<Arc<InitialGraphCommitData>>,
     pub commit_oid_to_index: HashMap<Oid, usize>,
@@ -691,6 +722,7 @@ pub struct Repository {
     // For a local repository, holds paths that have had worktree events since the last status scan completed,
     // and that should be examined during the next status scan.
     paths_needing_status_update: Vec<Vec<RepoPath>>,
+    last_full_scan_finished_at: Option<Instant>,
     job_sender: mpsc::UnboundedSender<GitJob>,
     _worker_task: Task<()>,
     active_jobs: HashMap<JobId, JobInfo>,
@@ -1044,6 +1076,10 @@ impl GitStore {
         client.add_entity_request_handler(Self::handle_create_remote);
         client.add_entity_request_handler(Self::handle_remove_remote);
         client.add_entity_request_handler(Self::handle_delete_branch);
+        client.add_entity_request_handler(Self::handle_merge);
+        client.add_entity_request_handler(Self::handle_cherry_pick);
+        client.add_entity_request_handler(Self::handle_abort_merge);
+        client.add_entity_request_handler(Self::handle_squash_commits);
         client.add_entity_request_handler(Self::handle_git_init);
         client.add_entity_request_handler(Self::handle_push);
         client.add_entity_request_handler(Self::handle_pull);
@@ -4342,6 +4378,78 @@ impl GitStore {
         Ok(proto::Ack {})
     }
 
+    async fn handle_merge(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitMerge>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::GitMergeResponse> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let branch_name = envelope.payload.branch_name;
+
+        let outcome = repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.merge(branch_name)
+            })
+            .await??;
+
+        Ok(merge_outcome_to_proto(outcome))
+    }
+
+    async fn handle_cherry_pick(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitCherryPick>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::GitMergeResponse> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let commit = envelope.payload.commit;
+
+        let outcome = repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.cherry_pick(commit)
+            })
+            .await??;
+
+        Ok(merge_outcome_to_proto(outcome))
+    }
+
+    async fn handle_abort_merge(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitAbortMerge>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+
+        repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.abort_merge()
+            })
+            .await??;
+
+        Ok(proto::Ack {})
+    }
+
+    async fn handle_squash_commits(
+        this: Entity<Self>,
+        envelope: TypedEnvelope<proto::GitSquashCommits>,
+        mut cx: AsyncApp,
+    ) -> Result<proto::Ack> {
+        let repository_id = RepositoryId::from_proto(envelope.payload.repository_id);
+        let repository_handle = Self::repository_for_request(&this, repository_id, &mut cx)?;
+        let commits = envelope.payload.commits;
+        let message = envelope.payload.message;
+
+        repository_handle
+            .update(&mut cx, |repository_handle, _| {
+                repository_handle.squash_commits(commits, message)
+            })
+            .await??;
+
+        Ok(proto::Ack {})
+    }
+
     async fn handle_remove_remote(
         this: Entity<Self>,
         envelope: TypedEnvelope<proto::GitRemoveRemote>,
@@ -6528,6 +6636,7 @@ impl Repository {
             commit_message_buffer: None,
             askpass_delegates: Default::default(),
             paths_needing_status_update: Default::default(),
+            last_full_scan_finished_at: None,
             latest_askpass_id: 0,
             job_sender: mpsc::unbounded().0,
             job_id: 0,
@@ -6577,6 +6686,7 @@ impl Repository {
             blob_read_limiter,
             pending_ops: Default::default(),
             paths_needing_status_update: Default::default(),
+            last_full_scan_finished_at: None,
             job_sender,
             _worker_task: worker_task,
             repository_state,
@@ -7131,6 +7241,16 @@ impl Repository {
         }
     }
 
+    pub fn rescan_if_stale(&mut self, max_age: Duration, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let is_fresh = self
+            .last_full_scan_finished_at
+            .is_some_and(|finished_at| now.saturating_duration_since(finished_at) < max_age);
+        if !is_fresh {
+            self.rescan(cx);
+        }
+    }
+
     pub fn show(&mut self, commit: String) -> oneshot::Receiver<Result<CommitDetails>> {
         let id = self.id;
         self.send_job("show", None, move |git_repo, _cx| async move {
@@ -7200,6 +7320,51 @@ impl Repository {
                 }
             }
         })
+    }
+
+    /// Resolves to `None` when the file is missing from the commit or is binary.
+    pub fn load_file_at_commit(
+        &mut self,
+        commit: String,
+        path: RepoPath,
+    ) -> oneshot::Receiver<Result<Option<String>>> {
+        let id = self.id;
+        self.send_job(
+            "load_file_at_commit",
+            None,
+            move |git_repo, _cx| async move {
+                match git_repo {
+                    RepositoryState::Local(LocalRepositoryState { backend, .. }) => {
+                        let content = backend
+                            .load_revisions(vec![format!("{commit}:{}", path.as_unix_str())])
+                            .await?
+                            .pop()
+                            .flatten();
+                        Ok(content
+                            .filter(|content| !is_binary_content(content))
+                            .and_then(|content| decode_git_text(content).ok()))
+                    }
+                    RepositoryState::Remote(RemoteRepositoryState {
+                        client, project_id, ..
+                    }) => {
+                        let response = client
+                            .request(proto::LoadCommitDiff {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commit,
+                                ignore_shallow_boundary: false,
+                            })
+                            .await?;
+                        Ok(response
+                            .files
+                            .into_iter()
+                            .find(|file| file.path == path.as_unix_str())
+                            .filter(|file| !file.is_binary)
+                            .and_then(|file| file.new_text))
+                    }
+                }
+            },
+        )
     }
 
     pub fn file_history_changed_files(
@@ -7348,6 +7513,7 @@ impl Repository {
                                 .initial_graph_data
                                 .get_mut(&(log_source.clone(), log_order))
                             {
+                                data.finished = true;
                                 match &result {
                                     Ok(()) => {
                                         cx.emit(RepositoryEvent::GraphEvent(
@@ -7378,6 +7544,7 @@ impl Repository {
 
                 InitialGitGraphData {
                     fetch_task,
+                    finished: false,
                     error: None,
                     commit_data: Vec::new(),
                     commit_oid_to_index: HashMap::default(),
@@ -7391,7 +7558,7 @@ impl Repository {
         GraphDataResponse {
             commits: &initial_commit_data.commit_data
                 [range.start.min(max_start)..range.end.min(max_end)],
-            is_loading: !initial_commit_data.fetch_task.is_ready(),
+            is_loading: !initial_commit_data.finished && !initial_commit_data.fetch_task.is_ready(),
             error: initial_commit_data.error.clone(),
         }
     }
@@ -9774,6 +9941,130 @@ impl Repository {
         )
     }
 
+    pub fn merge(&mut self, branch_name: String) -> oneshot::Receiver<Result<MergeOutcome>> {
+        let id = self.id;
+        self.send_job(
+            "merge",
+            Some(format!("git merge {branch_name}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.merge(branch_name, environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        let response = client
+                            .request(proto::GitMerge {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                branch_name,
+                            })
+                            .await?;
+                        Ok(merge_outcome_from_proto(response))
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn cherry_pick(&mut self, commit: String) -> oneshot::Receiver<Result<MergeOutcome>> {
+        let id = self.id;
+        self.send_job(
+            "cherry_pick",
+            Some(format!("git cherry-pick {commit}").into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.cherry_pick(commit, environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        let response = client
+                            .request(proto::GitCherryPick {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commit,
+                            })
+                            .await?;
+                        Ok(merge_outcome_from_proto(response))
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn abort_merge(&mut self) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        self.send_job(
+            "abort_merge",
+            Some("git merge --abort".into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.abort_merge(environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitAbortMerge {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn squash_commits(
+        &mut self,
+        commits: Vec<String>,
+        message: String,
+    ) -> oneshot::Receiver<Result<()>> {
+        let id = self.id;
+        self.send_job(
+            "squash_commits",
+            Some(format!("git squash {} commits", commits.len()).into()),
+            move |repo, _cx| async move {
+                match repo {
+                    RepositoryState::Local(LocalRepositoryState {
+                        backend,
+                        environment,
+                        ..
+                    }) => backend.squash_commits(commits, message, environment).await,
+                    RepositoryState::Remote(RemoteRepositoryState { project_id, client }) => {
+                        client
+                            .request(proto::GitSquashCommits {
+                                project_id: project_id.0,
+                                repository_id: id.to_proto(),
+                                commits,
+                                message,
+                            })
+                            .await?;
+                        Ok(())
+                    }
+                }
+            },
+        )
+    }
+
+    pub fn abortable_merge(&self) -> Option<AbortableMerge> {
+        self.snapshot
+            .merge
+            .merge_heads_by_conflicted_path
+            .values()
+            .find_map(|heads| match heads.as_slice() {
+                [Some(_), ..] => Some(AbortableMerge::Merge),
+                [None, Some(_), ..] => Some(AbortableMerge::CherryPick),
+                _ => None,
+            })
+    }
+
     pub fn rename_branch(
         &mut self,
         branch: String,
@@ -10081,6 +10372,7 @@ impl Repository {
                 };
                 let snapshot = compute_snapshot(this.clone(), backend.clone(), &mut cx).await;
                 this.update(&mut cx, |this, cx| {
+                    this.last_full_scan_finished_at = Some(cx.background_executor().now());
                     this.clear_pending_ops(cx);
                 });
                 if let Some(updates_tx) = updates_tx {

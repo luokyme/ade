@@ -672,6 +672,34 @@ pub struct GitPanelSettingsContent {
     ///
     /// Default: file_diff
     pub entry_primary_click_action: Option<GitPanelClickBehavior>,
+
+    /// How commits are shown in the Git panel's History section.
+    ///
+    /// Default: detailed
+    pub history_style: Option<GitPanelHistoryStyle>,
+}
+
+#[derive(
+    Default,
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    PartialEq,
+    Eq,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum GitPanelHistoryStyle {
+    /// Two lines per commit, with the author's avatar, the date and the SHA.
+    #[default]
+    Detailed,
+    /// One line per commit, with a branch graph.
+    Graph,
 }
 
 #[derive(
@@ -1151,6 +1179,7 @@ pub enum AgentChatAgent {
     Codex,
     #[strum(serialize = "OpenCode")]
     Opencode,
+    Antigravity,
 }
 
 #[with_fallible_options]
@@ -1162,6 +1191,8 @@ pub struct AgentChatDefaultPermissionContent {
     pub codex: Option<CodexPermissionDefault>,
     /// Default: "auto"
     pub opencode: Option<OpencodePermissionDefault>,
+    /// Default: "auto"
+    pub antigravity: Option<AntigravityPermissionDefault>,
 }
 
 #[with_fallible_options]
@@ -1173,6 +1204,8 @@ pub struct AgentChatAgentsContent {
     pub codex: Option<bool>,
     /// Default: true
     pub opencode: Option<bool>,
+    /// Default: true
+    pub antigravity: Option<bool>,
 }
 
 #[with_fallible_options]
@@ -1278,6 +1311,31 @@ pub enum OpencodePermissionDefault {
     Auto,
     #[strum(serialize = "Full Access")]
     #[default]
+    FullAccess,
+}
+
+#[with_fallible_options]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    Default,
+    PartialEq,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravityPermissionDefault {
+    Ask,
+    #[strum(serialize = "Accept Edits")]
+    AcceptEdits,
+    #[default]
+    Auto,
+    #[strum(serialize = "Full Access")]
     FullAccess,
 }
 

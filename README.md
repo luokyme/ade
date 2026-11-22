@@ -16,7 +16,7 @@ Ade is a fast, native code editor written in Rust, with a clean, modern design a
 
 - ⚡ **Native and fast.** No Electron or webviews. Opens instantly and stays responsive on large views.
 - 🍃 **Lightweight.** Ade's memory footprint is lower than VS Code and Zed. See [benchmarks](https://github.com/luokyme/ade/blob/main/docs/memory-benchmark.md).
-- 👾 **Coding agents included.** Built-in support for Claude Code, Codex, and OpenCode.
+- 👾 **Coding agents included.** Built-in support for Claude Code, Codex, OpenCode, and Antigravity.
 - ✨ **Beautiful by default.** Clean, modern look with a delightful UX.
 - 🤫 **No account or telemetry.** Nothing to sign in to. Ade never sends your usage data anywhere.
 

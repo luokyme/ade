@@ -57,7 +57,7 @@ export const en = {
     },
     agents: {
       title: 'Your coding agents, built in',
-      body: "Work with Claude Code, Codex and OpenCode right next to your code, using the existing accounts you're signed in from.",
+      body: "Work with Claude Code, Codex, OpenCode and Antigravity right next to your code, using the existing accounts you're signed in from.",
       link: 'How it works'
     },
     openSource: {
@@ -95,7 +95,7 @@ export const en = {
       {
         question: 'Does Ade support AI coding agents?',
         answer:
-          "Yes. Ade has built-in support for coding agents like Claude Code, Codex, and OpenCode. However, Ade doesn't support Zed's AI features, like the inline assistant and edit predictions."
+          "Yes. Ade has built-in support for coding agents like Claude Code, Codex, OpenCode, and Antigravity. However, Ade doesn't support Zed's AI features, like the inline assistant and edit predictions."
       },
       {
         question: 'Do Zed extensions work in Ade?',
@@ -113,7 +113,7 @@ export const en = {
       {
         question: 'How is Ade different from Zed?',
         answer:
-          "Ade drops Zed's AI service, collaboration and telemetry features. It has its own agent chat built on the Claude Code, Codex and OpenCode CLIs, its own look, and several other improvements over Zed. See [docs](/docs/) for more."
+          "Ade drops Zed's AI service, collaboration and telemetry features. It has its own agent chat built on the Claude Code, Codex, OpenCode and Antigravity CLIs, its own look, and several other improvements over Zed. See [docs](/docs/) for more."
       },
       {
         question: 'Where can I report a problem?',
@@ -138,7 +138,7 @@ export const en = {
     agentChat: {
       title: 'Agent Chat',
       intro:
-        'Chat with Claude Code, Codex or OpenCode inside Ade. It uses the command line tools you already have installed and signed in, so there are no API keys and no Ade account.',
+        'Chat with Claude Code, Codex, OpenCode or Antigravity inside Ade. It uses the command line tools you already have installed and signed in, so there are no API keys and no Ade account.',
       items: [
         '**Start a chat** from the agent icon in the activity bar. Continue Saved Chat picks up one you started in the terminal.',
         '**Type** `/` for commands, `@` to mention a file and `$` for a skill. Paste or drop images to attach them.',

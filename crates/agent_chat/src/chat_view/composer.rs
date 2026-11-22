@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     AgentKind,
-    chat_style::{composer_surface, icon, icon_size_px, tracked_upper},
+    chat_style::{composer_surface, icon, icon_size_px, tracked_upper, working_animation},
     session::AgentUpdateStatus,
 };
 use i18n::t;
@@ -39,7 +39,11 @@ pub(super) fn tray_surface(cx: &App) -> gpui::Div {
 }
 
 impl ChatView {
-    pub(super) fn render_model_chip(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn render_model_chip(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let session = self.session.read(cx);
         let kind = session.kind();
         let settings = session.settings();
@@ -49,7 +53,9 @@ impl ChatView {
         let fast = selection.fast_on();
         let colors = cx.theme().colors();
         let brand = match kind {
-            AgentKind::Codex | AgentKind::Opencode => agent_icon(kind).color(Color::Muted),
+            AgentKind::Codex | AgentKind::Opencode | AgentKind::Antigravity => {
+                agent_icon(kind).color(Color::Muted)
+            }
             AgentKind::Claude => agent_icon(kind),
         }
         .size(icon_size_px(16., window));
@@ -109,8 +115,7 @@ impl ChatView {
         let colors = cx.theme().colors();
         let is_working = self.session.read(cx).is_working();
         let has_text = self.staging_count == 0
-            && (!self.composer.read(cx).text(cx).trim().is_empty()
-                || !self.attachments.is_empty());
+            && (!self.composer.read(cx).text(cx).trim().is_empty() || !self.attachments.is_empty());
         let focus_handle = self.composer.focus_handle(cx);
         let plate = page(cx);
         let circle = |id: &'static str| {
@@ -195,8 +200,8 @@ impl ChatView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let colors = cx.theme().colors();
-        let show_commands = self.command_menu.is_some()
-            && self.composer.focus_handle(cx).is_focused(window);
+        let show_commands =
+            self.command_menu.is_some() && self.composer.focus_handle(cx).is_focused(window);
         let mut key_context = KeyContext::default();
         key_context.add("AgentComposer");
         if AgentChatSettings::get_global(cx).send_with == AgentChatSendKey::ModifierEnter {
@@ -236,7 +241,9 @@ impl ChatView {
                     cx.stop_propagation();
                 }
             }))
-            .when(show_commands, |this| this.child(self.render_command_menu(cx)))
+            .when(show_commands, |this| {
+                this.child(self.render_command_menu(cx))
+            })
             .w_full()
             .rounded(px(radius))
             .border_1()
@@ -316,7 +323,7 @@ impl ChatView {
                 icon(IconName::LoadCircle, px(12.), color)
                     .with_animation(
                         "agent-update-spinner",
-                        Animation::new(Duration::from_secs(1)).repeat(),
+                        working_animation(Duration::from_secs(1)),
                         |this, delta| {
                             this.with_transformation(Transformation::rotate(gpui::percentage(
                                 delta,
@@ -423,12 +430,8 @@ impl ChatView {
                             cx.entity_id()
                         )))
                         .trigger(
-                            Chip::new(
-                                "agent-context-chip",
-                                6.,
-                                context_chip(context_fraction, cx),
-                            )
-                            .hover_background(ring_hover),
+                            Chip::new("agent-context-chip", 6., context_chip(context_fraction, cx))
+                                .hover_background(ring_hover),
                         )
                         .menu(move |_, cx| Some(cx.new(|cx| ContextCard::new(context, cx))))
                         .anchor(Anchor::BottomRight)
@@ -526,7 +529,12 @@ impl ChatView {
         });
     }
 
-    pub(super) fn submit_answer(&mut self, _: &SubmitAnswer, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn submit_answer(
+        &mut self,
+        _: &SubmitAnswer,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pending) = self.session.read(cx).pending_questions().first() else {
             return;
         };
@@ -726,7 +734,11 @@ impl ChatView {
             .into_any_element()
     }
 
-    pub(super) fn render_question_panel(&self, pending: &PendingQuestion, cx: &Context<Self>) -> AnyElement {
+    pub(super) fn render_question_panel(
+        &self,
+        pending: &PendingQuestion,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let colors = cx.theme().colors();
         let pending_id: SharedString = pending.id().to_string().into();
         let count = pending.questions.len();
@@ -749,9 +761,7 @@ impl ChatView {
             .answer_editors
             .get(&question.id)
             .map(|(editor, _)| editor.clone());
-        let answer_editor = typed_editor
-            .clone()
-            .filter(|_| question.options.is_empty());
+        let answer_editor = typed_editor.clone().filter(|_| question.options.is_empty());
         let options: Vec<AnyElement> = if is_permission {
             [(t!("Allow"), true), (t!("Deny"), false)]
                 .into_iter()
@@ -961,9 +971,16 @@ impl ChatView {
                                     .cursor_pointer()
                                     .text_size(ui(13.))
                                     .text_color(colors.text_muted)
-                                    .hover(move |style| style.bg(back_hover).text_color(colors.text))
+                                    .hover(move |style| {
+                                        style.bg(back_hover).text_color(colors.text)
+                                    })
                                     .tooltip(move |_, cx| {
-                                        Tooltip::for_action_in(t!("Stop"), &Stop, &question_focus, cx)
+                                        Tooltip::for_action_in(
+                                            t!("Stop"),
+                                            &Stop,
+                                            &question_focus,
+                                            cx,
+                                        )
                                     })
                                     .child(t!("Stop"))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -987,7 +1004,12 @@ impl ChatView {
                                             this.cursor_pointer()
                                                 .hover(|style| style.opacity(0.9))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.advance_question(&pending_id, page_index, count, cx)
+                                                    this.advance_question(
+                                                        &pending_id,
+                                                        page_index,
+                                                        count,
+                                                        cx,
+                                                    )
                                                 }))
                                         })
                                         .child(if is_last_page {
@@ -996,10 +1018,9 @@ impl ChatView {
                                             t!("Next")
                                         }),
                                 )
-                            })
+                            }),
                     ),
             )
             .into_any_element()
     }
 }
-

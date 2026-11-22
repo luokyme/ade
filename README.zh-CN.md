@@ -16,7 +16,7 @@ Ade 是一款用 Rust 编写的快速原生代码编辑器，界面简洁现代�
 
 - ⚡ **原生、快速。** 不用 Electron，也没有网页视图。打开就能用，大型视图下也一直流畅。
 - 🍃 **轻量。** Ade 占用的内存比 VS Code 和 Zed 都少。查看[测试结果](https://github.com/luokyme/ade/blob/main/docs/memory-benchmark.md)。
-- 👾 **内置编程智能体。** 直接支持 Claude Code、Codex 和 OpenCode。
+- 👾 **内置编程智能体。** 直接支持 Claude Code、Codex、OpenCode 和 Antigravity。
 - ✨ **默认就好看。** 外观简洁现代，用起来也顺手。
 - 🤫 **无需账号，没有遥测。** 不用登录任何东西。Ade 从不把你的使用数据发送到任何地方。
 
