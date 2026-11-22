@@ -2294,7 +2294,15 @@ impl Element for MarkdownElement {
         let mut current_img_block_range: Option<Range<usize>> = None;
         let mut handled_html_block = false;
         let mut rendered_metadata_block = false;
+        let mut hide_code_block_body = false;
         for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
+            // Hidden text is never laid out, so it cannot participate in selection or hit testing.
+            if hide_code_block_body
+                && !matches!(event, MarkdownEvent::End(MarkdownTagEnd::CodeBlock))
+            {
+                continue;
+            }
+
             // Skip alt text for images that rendered
             if let Some(current_img_block_range) = &current_img_block_range
                 && current_img_block_range.end > range.end
@@ -2472,9 +2480,12 @@ impl Element for MarkdownElement {
                                     builder.push_code_block(language);
                                     builder.push_div(code_block, range, markdown_end);
                                 }
-                                (CodeBlockRenderer::Custom {
-                                    render, hide_body, ..
-                                }, _) => {
+                                (
+                                    CodeBlockRenderer::Custom {
+                                        render, hide_body, ..
+                                    },
+                                    _,
+                                ) => {
                                     let parent_container = render(
                                         kind,
                                         &parsed_markdown,
@@ -2503,10 +2514,10 @@ impl Element for MarkdownElement {
                                         .source()
                                         .get(metadata.content_range.clone())
                                         .unwrap_or_default();
-                                    if hide_body
+                                    hide_code_block_body = hide_body
                                         .as_ref()
-                                        .is_some_and(|hide_body| hide_body(kind, code, cx))
-                                    {
+                                        .is_some_and(|hide_body| hide_body(kind, code, cx));
+                                    if hide_code_block_body {
                                         code_block = code_block.hidden();
                                     }
 
@@ -2769,6 +2780,7 @@ impl Element for MarkdownElement {
                         self.pop_markdown_block_quote(&mut builder);
                     }
                     MarkdownTagEnd::CodeBlock => {
+                        hide_code_block_body = false;
                         builder.trim_trailing_newline();
 
                         builder.pop_div();
@@ -4861,6 +4873,64 @@ mod tests {
             seen.lock().expect("lock").first(),
             Some(&("rust".to_string(), "fn main() {}\n".to_string()))
         );
+    }
+
+    #[gpui::test]
+    fn test_hidden_code_block_allows_mouse_selection(cx: &mut TestAppContext) {
+        struct CustomMarkdown {
+            markdown: Entity<Markdown>,
+            rendered_text: Rc<RefCell<Option<RenderedText>>>,
+        }
+
+        impl Render for CustomMarkdown {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                CapturingMarkdownElement {
+                    markdown_element: MarkdownElement::new(
+                        self.markdown.clone(),
+                        MarkdownStyle::default(),
+                    )
+                    .code_block_renderer(CodeBlockRenderer::Custom {
+                        render: Arc::new(|_, _, _, _, _, _| div().child("Diagram preview")),
+                        transform: None,
+                        hide_body: Some(Arc::new(|_, _, _| true)),
+                    }),
+                    rendered_text: self.rendered_text.clone(),
+                }
+            }
+        }
+
+        ensure_theme_initialized(cx);
+        let source = "Before\n\n```mermaid\ngraph TD; A --> B\n```\n\nAfter";
+        let markdown = cx.new(|cx| Markdown::new(source.into(), None, None, cx));
+        let rendered_text = Rc::new(RefCell::new(None));
+        let (_, cx) = cx.add_window_view({
+            let markdown = markdown.clone();
+            let rendered_text = rendered_text.clone();
+            move |_, _| CustomMarkdown {
+                markdown,
+                rendered_text,
+            }
+        });
+        cx.run_until_parked();
+
+        let rendered = rendered_text.borrow().clone().expect("rendered markdown");
+        let before = &rendered.lines.first().expect("first line").layout;
+        let after = &rendered.lines.last().expect("last line").layout;
+        let start = point(before.bounds().left(), before.bounds().center().y);
+        let end = point(after.bounds().right(), after.bounds().center().y);
+
+        cx.simulate_mouse_move(after.bounds().center(), None, Modifiers::default());
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+
+        markdown.read_with(cx, |markdown, _| {
+            let selection = &markdown.selection;
+            assert_eq!(
+                rendered.text_for_range(selection.start..selection.end),
+                "Before\nAfter"
+            );
+        });
     }
 
     #[gpui::test]
