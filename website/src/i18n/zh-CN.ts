@@ -255,7 +255,7 @@ export const zhCN: Messages = {
       zoomIn: '最大化窗格'
     },
     toolbar: { bufferSearch: '缓冲区搜索', selectionControls: '选区选项', editorControls: '编辑器选项' },
-    statusBar: { languageServers: '语言服务器', diagnostics: '项目诊断', terminal: '终端面板' },
+    statusBar: { languageServers: '语言服务器', terminal: '终端面板' },
     diff: {
       collapseAll: '折叠所有文件',
       unified: '统一',

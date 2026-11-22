@@ -732,14 +732,6 @@ pub enum GitGraphDateFormat {
 #[with_fallible_options]
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, MergeFrom)]
 pub struct DiagnosticsSettingsContent {
-    /// Whether to show the project diagnostics button in the status bar.
-    pub button: Option<bool>,
-
-    /// Whether or not to include warning diagnostics.
-    ///
-    /// Default: true
-    pub include_warnings: Option<bool>,
-
     /// Settings for using LSP pull diagnostics mechanism in Ade.
     pub lsp_pull_diagnostics: Option<LspPullDiagnosticsSettingsContent>,
 

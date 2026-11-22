@@ -63,7 +63,6 @@ pub(super) struct ActiveDiagnosticGroup {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ActiveDiagnostic {
     None,
-    All,
     Group(ActiveDiagnosticGroup),
 }
 
@@ -252,14 +251,6 @@ impl Editor {
         }
     }
 
-    pub fn set_all_diagnostics_active(&mut self, cx: &mut Context<Self>) {
-        if !self.diagnostics_enabled() {
-            return;
-        }
-        self.dismiss_diagnostics(cx);
-        self.active_diagnostics = ActiveDiagnostic::All;
-    }
-
     /// Disable inline diagnostics rendering for this editor.
     pub fn disable_inline_diagnostics(&mut self) {
         self.inline_diagnostics_enabled = false;
@@ -332,10 +323,6 @@ impl Editor {
         }
     }
 
-    pub(super) fn all_diagnostics_active(&self) -> bool {
-        self.active_diagnostics == ActiveDiagnostic::All
-    }
-
     pub(super) fn active_diagnostic_group_id(&self) -> Option<usize> {
         match &self.active_diagnostics {
             ActiveDiagnostic::Group(group) => Some(group.group_id),
@@ -381,7 +368,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.diagnostics_enabled() || matches!(self.active_diagnostics, ActiveDiagnostic::All) {
+        if !self.diagnostics_enabled() {
             return;
         }
         self.dismiss_diagnostics(cx);
@@ -427,10 +414,6 @@ impl Editor {
     }
 
     pub(super) fn dismiss_diagnostics(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.active_diagnostics, ActiveDiagnostic::All) {
-            return;
-        };
-
         let prev = mem::replace(&mut self.active_diagnostics, ActiveDiagnostic::None);
         if let ActiveDiagnostic::Group(group) = prev {
             self.display_map.update(cx, |display_map, cx| {
@@ -538,10 +521,7 @@ impl Editor {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<()> {
-        // `ActiveDiagnostic::All` is a special mode where editor's diagnostics are managed by the external view,
-        // skip any LSP updates for it.
-
-        if self.active_diagnostics == ActiveDiagnostic::All || !self.diagnostics_enabled() {
+        if !self.diagnostics_enabled() {
             return None;
         }
         let pull_diagnostics_settings = ProjectSettings::get_global(cx)
@@ -587,14 +567,6 @@ impl Editor {
         self.refresh_inline_diagnostics(true, window, cx);
         self.scrollbar_marker_state.dirty = true;
         cx.notify();
-    }
-
-    pub fn any_active_diagnostics(&self) -> bool {
-        match &self.active_diagnostics {
-            ActiveDiagnostic::None => false,
-            ActiveDiagnostic::All => true,
-            ActiveDiagnostic::Group(_) => true,
-        }
     }
 }
 

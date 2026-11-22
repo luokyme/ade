@@ -1513,7 +1513,6 @@ export function AdeWindow() {
       <div className="flex h-[30px] shrink-0 items-center justify-between gap-2 p-1 text-[12px]">
         <span className="flex items-center gap-1">
           {activeFile?.language === 'rust' && <IconButton name="bolt_outlined" label={t.statusBar.languageServers} />}
-          <IconButton name="check" label={t.statusBar.diagnostics} />
         </span>
         <span className="flex items-center gap-1">
           {activeFile && cursor && (

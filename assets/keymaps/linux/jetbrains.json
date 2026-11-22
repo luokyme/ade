@@ -117,7 +117,6 @@
       "ctrl-alt-shift-n": "project_symbols::Toggle",
       "alt-0": "git_panel::ToggleFocus",
       "alt-1": "project_panel::ToggleFocus",
-      "alt-6": "diagnostics::Deploy",
     },
   },
   {
@@ -127,7 +126,6 @@
       "alt-2": null, // Bookmarks (left dock)
       "alt-3": null, // Find Panel (bottom dock)
       "alt-4": null, // Run Panel (bottom dock)
-      "alt-6": "diagnostics::Deploy",
       "alt-8": null, // Services (bottom dock)
       "alt-9": null, // Git History (bottom dock)
       "alt-0": "git_panel::ToggleFocus",

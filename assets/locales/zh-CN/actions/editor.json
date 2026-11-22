@@ -1029,7 +1029,7 @@
   },
   "editor::ToggleDiagnostics": {
     "name": "切换诊断",
-    "description": "显示或隐藏诊断面板。"
+    "description": "显示或隐藏当前编辑器中的诊断。"
   },
   "editor::ToggleFocus": {
     "name": "切换焦点",

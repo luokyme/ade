@@ -267,7 +267,7 @@ export const en = {
       zoomIn: 'Zoom In'
     },
     toolbar: { bufferSearch: 'Buffer Search', selectionControls: 'Selection Controls', editorControls: 'Editor Controls' },
-    statusBar: { languageServers: 'Language Servers', diagnostics: 'Project Diagnostics', terminal: 'Terminal Panel' },
+    statusBar: { languageServers: 'Language Servers', terminal: 'Terminal Panel' },
     diff: {
       collapseAll: 'Collapse All Files',
       unified: 'Unified',

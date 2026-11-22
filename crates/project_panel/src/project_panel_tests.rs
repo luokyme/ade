@@ -6851,7 +6851,7 @@ async fn test_explicit_reveal(cx: &mut gpui::TestAppContext) {
     );
 }
 
-/// Mirrors real multi-buffer views (`ProjectDiagnosticsEditor`, `ProjectDiff`,
+/// Mirrors real multi-buffer views (`ProjectDiff`, `CommitView`,
 /// etc.): the workspace `Item` is a thin wrapper that holds an inner `Editor`
 /// and re-emits its events.
 mod multibuffer_wrapper {
@@ -7015,7 +7015,7 @@ async fn test_autoreveal_follows_multibuffer_selection(cx: &mut gpui::TestAppCon
     });
 
     // Wrap the multibuffer editor in an `Item`, mirroring real multibuffer
-    // views (`ProjectDiagnosticsEditor`, `ProjectDiff`, etc.). Auto-reveal
+    // views (`ProjectDiff`, `CommitView`, etc.). Auto-reveal
     // should follow the inner editor's active buffer.
     workspace.update_in(cx, |workspace, window, cx| {
         let wrapper = cx.new(|cx| TestMultibufferWrapper::new(inner_editor.clone(), cx));

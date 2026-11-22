@@ -211,8 +211,7 @@ pub struct EditorSettingsContent {
 
     /// Which level to use to filter out diagnostics displayed in the editor.
     ///
-    /// Affects the editor rendering only, and does not interrupt
-    /// the functionality of diagnostics fetching and project diagnostics editor.
+    /// This setting filters the editor display after diagnostics have been fetched.
     /// Which files containing diagnostic errors/warnings to mark in the tabs.
     /// Diagnostics are only shown when file icons are also active.
     ///

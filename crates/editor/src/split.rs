@@ -155,6 +155,17 @@ struct SplitLhsDiffHunkRenderer {
 }
 
 impl DiffHunkRenderer for SplitLhsDiffHunkRenderer {
+    fn show_controls_for_inactive_hunks(&self, cx: &App) -> bool {
+        self.splittable.upgrade().is_some_and(|splittable| {
+            splittable
+                .read(cx)
+                .rhs_editor
+                .read(cx)
+                .diff_hunk_renderer()
+                .show_controls_for_inactive_hunks(cx)
+        })
+    }
+
     fn render_hunk_controls(
         &self,
         row: u32,
@@ -426,7 +437,7 @@ impl DiffStyleControls {
         Self { splittable_editor }
     }
 
-    fn set_diff_view_style(
+    pub fn set_diff_view_style(
         splittable_editor: &Entity<SplittableEditor>,
         diff_view_style: DiffViewStyle,
         window: &mut Window,
@@ -539,6 +550,7 @@ pub struct SplittableEditor {
     workspace: WeakEntity<Workspace>,
     split_state: Entity<SplitEditorState>,
     searched_side: Option<SplitSide>,
+    show_change_connections: bool,
     /// The preferred diff style.
     diff_view_style: DiffViewStyle,
     /// True when the current width is below the minimum threshold for split
@@ -581,6 +593,20 @@ impl SplittableEditor {
 
     pub fn is_split(&self) -> bool {
         self.lhs.is_some()
+    }
+
+    pub fn with_change_connections(mut self) -> Self {
+        self.show_change_connections = true;
+        self
+    }
+
+    pub(crate) fn shows_change_connections(&self) -> bool {
+        self.show_change_connections
+    }
+
+    pub fn split_ratio(&self, cx: &App) -> Option<f32> {
+        self.is_split()
+            .then(|| self.split_state.read(cx).left_ratio())
     }
 
     pub fn set_diff_hunk_renderer(
@@ -633,8 +659,10 @@ impl SplittableEditor {
             editor.set_diff_hunk_renderer(Some(Arc::new(DefaultDiffHunkRenderer)), cx);
             editor
         });
+        let split_state = cx.new(|cx| SplitEditorState::new(cx));
         // TODO(split-diff) we might want to tag editor events with whether they came from rhs/lhs
         let subscriptions = vec![
+            cx.observe(&split_state, |_, _, cx| cx.notify()),
             cx.subscribe(
                 &rhs_editor,
                 |this, _, event: &EditorEvent, cx| match event {
@@ -689,7 +717,6 @@ impl SplittableEditor {
                 }
             }
         });
-        let split_state = cx.new(|cx| SplitEditorState::new(cx));
         Self {
             diff_view_style: style,
             rhs_editor,
@@ -698,6 +725,7 @@ impl SplittableEditor {
             workspace: workspace.downgrade(),
             split_state,
             searched_side: None,
+            show_change_connections: false,
             too_narrow_for_split: false,
             last_width: None,
             _subscriptions: subscriptions,
@@ -838,7 +866,7 @@ impl SplittableEditor {
         let rhs_display_map = self.rhs_editor.read(cx).display_map.clone();
         let lhs_display_map = lhs_editor.read(cx).display_map.clone();
         let rhs_display_map_id = rhs_display_map.entity_id();
-        let companion = cx.new(|_| Companion::new(rhs_display_map_id));
+        let companion = cx.new(|_| Companion::new(rhs_display_map_id, !self.show_change_connections));
         let lhs = LhsEditor {
             editor: lhs_editor,
             multibuffer: lhs_multibuffer,
@@ -987,11 +1015,27 @@ impl SplittableEditor {
         let source_snapshot = source_editor.update(cx, |editor, cx| editor.snapshot(window, cx));
         let target_snapshot = target_editor.update(cx, |editor, cx| editor.snapshot(window, cx));
 
-        let display_point = source_snapshot
-            .display_snapshot
-            .point_to_display_point(source_point, Bias::Right);
-        let display_point = target_snapshot.clip_point(display_point, Bias::Right);
-        let target_point = target_snapshot.display_point_to_point(display_point, Bias::Right);
+        let target_point = if self.show_change_connections {
+            let source_map = &source_editor.read(cx).display_map;
+            let Some(companion) = source_map.read(cx).companion() else {
+                return;
+            };
+            companion
+                .read(cx)
+                .convert_point_to_companion(
+                    source_map.entity_id(),
+                    &source_snapshot.buffer_snapshot(),
+                    &target_snapshot.buffer_snapshot(),
+                    source_point,
+                )
+                .start
+        } else {
+            let display_point = source_snapshot
+                .display_snapshot
+                .point_to_display_point(source_point, Bias::Right);
+            let display_point = target_snapshot.clip_point(display_point, Bias::Right);
+            target_snapshot.display_point_to_point(display_point, Bias::Right)
+        };
 
         target_editor.update(cx, |editor, cx| {
             editor.set_suppress_selection_callback(true);
@@ -1022,6 +1066,7 @@ impl SplittableEditor {
                 }
             }
         }
+        cx.notify();
     }
 
     fn intercept_toggle_breakpoint(
@@ -1152,6 +1197,7 @@ impl SplittableEditor {
                 .update(cx, |shared, _| {
                     shared.scroll_anchor = native_anchor;
                     shared.display_map_id = Some(rhs_display_map_id);
+                    shared.connected_scroll = None;
                 });
 
             rhs.set_on_local_selections_changed(None);

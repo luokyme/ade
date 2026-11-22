@@ -1,38 +1,38 @@
-use crate::{git_panel::GitStatusEntry, git_panel_settings::GitPanelSettings, git_status_icon};
 use anyhow::{Context as _, Result};
-use buffer_diff::DiffHunkSecondaryStatus;
+use buffer_diff::{DiffHunkSecondaryStatus, DiffHunkStatus};
 use editor::{
-    DiffStyleControls, Direction, Editor, EditorEvent, EditorSettings, SplittableEditor,
-    ToggleSplitDiff,
-    actions::{GoToHunk, GoToPreviousHunk},
-    file_status_label_color,
+    DiffHunkRenderer, DiffStyleControls, Direction, Editor, EditorEvent, EditorSettings,
+    SplittableEditor,
+    actions::{GoToHunk, GoToPreviousHunk, OpenExcerpts},
 };
 use git::{
     Commit, Restore, StageAndNext, StageFile, ToggleStaged, UnstageAndNext, UnstageFile,
     repository::RepoPath, status::StageStatus,
 };
 use gpui::{
-    Action, App, AppContext as _, Context, Empty, Entity, EventEmitter, FocusHandle, Focusable,
-    HighlightStyle, IntoElement, Render, Subscription, Task, WeakEntity, Window,
+    Action, Anchor as PopoverAnchor, AnyElement, App, AppContext as _, Context, Entity,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, Subscription, Task,
+    WeakEntity, Window, relative,
 };
 use i18n::t;
-use language::{Anchor, Buffer, HighlightedText, OffsetRangeExt as _, Point};
+use language::{Anchor, Buffer, OffsetRangeExt as _, Point};
 use multi_buffer::{MultiBuffer, PathKey, excerpt_context_lines};
 use project::{
     Project, ProjectPath,
     git_store::{Repository, RepositoryId},
+    project_settings::ProjectSettings,
 };
-use settings::{Settings, SettingsStore, StatusStyle};
+use settings::{DiffViewStyle, Settings};
 use std::{
     any::{Any, TypeId},
     ops::Range,
     sync::Arc,
 };
-use ui::{DiffStat, Divider, Tooltip, prelude::*};
+use ui::{ContextMenu, DiffStat, PopoverMenu, Tooltip, prelude::*};
+use util::ResultExt as _;
 use util::paths::{PathExt as _, PathStyle};
 use workspace::{
-    Item, ItemHandle, ItemNavHistory, ToolbarItemEvent, ToolbarItemLocation, ToolbarItemView,
-    Workspace,
+    Item, ItemHandle, ItemNavHistory, SaveIntent, ToolbarItemLocation, Workspace,
     item::{ItemEvent, SaveOptions},
     notifications::NotifyTaskExt,
     searchable::SearchableItemHandle,
@@ -47,12 +47,13 @@ pub struct SoloDiffView {
     editor: Entity<SplittableEditor>,
     workspace: WeakEntity<Workspace>,
     showing_full_file: bool,
-    _settings_subscription: Subscription,
+    navigating_files: bool,
+    _subscriptions: Vec<Subscription>,
 }
 
 impl SoloDiffView {
     pub fn open_or_focus(
-        entry: GitStatusEntry,
+        repo_path: RepoPath,
         repository: Entity<Repository>,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
@@ -65,7 +66,7 @@ impl SoloDiffView {
         let existing = workspace_entity
             .read(cx)
             .items_of_type::<SoloDiffView>(cx)
-            .find(|item| item.read(cx).matches(&repository, &entry.repo_path, cx));
+            .find(|item| item.read(cx).matches(&repository, &repo_path, cx));
         if let Some(existing) = existing {
             workspace_entity.update(cx, |workspace, cx| {
                 workspace.activate_item(&existing, true, true, window, cx);
@@ -76,16 +77,15 @@ impl SoloDiffView {
 
         let Some(project_path) = repository
             .read(cx)
-            .repo_path_to_project_path(&entry.repo_path, cx)
+            .repo_path_to_project_path(&repo_path, cx)
         else {
             return Task::ready(Err(anyhow::anyhow!(
                 "could not resolve repository path {:?}",
-                entry.repo_path
+                repo_path
             )));
         };
 
         let project = workspace_entity.read(cx).project().clone();
-        let repo_path = entry.repo_path;
         window.spawn(cx, async move |cx| {
             let buffer = project
                 .update(cx, |project, cx| {
@@ -141,7 +141,10 @@ impl SoloDiffView {
                 workspace.clone(),
                 window,
                 cx,
-            );
+            )
+            .with_change_connections();
+            editor
+                .set_diff_hunk_renderer(Some(Arc::new(CompactHunkControls(cx.weak_entity()))), cx);
             editor.rhs_editor().update(cx, |editor, cx| {
                 editor.set_should_serialize(false, cx);
                 editor.set_allow_git_diff_scrollbar_markers(showing_full_file, cx);
@@ -158,20 +161,20 @@ impl SoloDiffView {
             editor
         });
 
-        let mut previous_diff_view_style = EditorSettings::get_global(cx).diff_view_style;
-        let settings_subscription =
-            cx.observe_global_in::<SettingsStore>(window, move |this, window, cx| {
-                let diff_view_style = EditorSettings::get_global(cx).diff_view_style;
-                if diff_view_style != previous_diff_view_style {
-                    this.editor.update(cx, |editor, cx| {
-                        if editor.diff_view_style() != diff_view_style {
-                            editor.toggle_split(&ToggleSplitDiff, window, cx);
-                        }
-                    });
-                    previous_diff_view_style = diff_view_style;
+        let subscriptions = vec![
+            cx.observe(&editor, |_, _, cx| cx.notify()),
+            cx.subscribe(&diff, |_, _, _: &buffer_diff::BufferDiffEvent, cx| {
+                cx.notify()
+            }),
+            cx.observe(&buffer, |_, _, cx| cx.notify()),
+            cx.observe(&repository, |_, _, cx| cx.notify()),
+            cx.subscribe(&editor, |_, _, event, cx| {
+                if matches!(event, EditorEvent::SelectionsChanged { .. }) {
                     cx.notify();
                 }
-            });
+                cx.emit(event.clone());
+            }),
+        ];
 
         Self {
             repository,
@@ -182,7 +185,8 @@ impl SoloDiffView {
             editor,
             workspace: workspace.downgrade(),
             showing_full_file,
-            _settings_subscription: settings_subscription,
+            navigating_files: false,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -270,7 +274,6 @@ impl SoloDiffView {
         let editor = self.editor.read(cx).rhs_editor().read(cx);
         let multibuffer = editor.buffer().read(cx);
         let snapshot = multibuffer.snapshot(cx);
-        let prev_next = snapshot.diff_hunks().next().is_some();
         let mut selection = true;
 
         let mut ranges = editor
@@ -322,7 +325,6 @@ impl SoloDiffView {
             stage,
             unstage,
             restore: stage || unstage,
-            prev_next,
             selection,
             stage_file: stage_status.has_unstaged(),
             unstage_file: stage_status.has_staged(),
@@ -330,7 +332,11 @@ impl SoloDiffView {
     }
 
     fn dispatch_action(&self, action: &dyn Action, window: &mut Window, cx: &mut App) {
-        self.focus_handle(cx).focus(window, cx);
+        self.editor
+            .read(cx)
+            .rhs_editor()
+            .focus_handle(cx)
+            .focus(window, cx);
         let action = action.boxed_clone();
         cx.defer(move |cx| {
             cx.dispatch_action(action.as_ref());
@@ -361,6 +367,409 @@ impl SoloDiffView {
         });
         task.detach_and_notify_err(workspace, window, cx);
     }
+
+    fn open_adjacent_file(&mut self, path: RepoPath, window: &mut Window, cx: &mut Context<Self>) {
+        if self.navigating_files {
+            return;
+        }
+        self.navigating_files = true;
+        cx.notify();
+        let previous_id = cx.entity_id();
+        let previous_buffer = self.buffer.clone();
+        let pane = self
+            .workspace
+            .upgrade()
+            .and_then(|workspace| workspace.read(cx).pane_for_item_id(previous_id));
+        let repository = self.repository.clone();
+        let workspace = self.workspace.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let opened = cx
+                .update(|window, cx| Self::open_or_focus(path, repository, workspace, window, cx))?
+                .await;
+            this.update(cx, |this, cx| {
+                this.navigating_files = false;
+                cx.notify();
+            })
+            .ok();
+            let opened = opened?;
+            if let Some(pane) = pane {
+                let close = pane.update_in(cx, |pane, window, cx| {
+                    let index = pane
+                        .items()
+                        .position(|item| item.item_id() == previous_id)?;
+                    (index >= pane.pinned_count()
+                        && !previous_buffer.read(cx).is_dirty()
+                        && pane
+                            .active_item()
+                            .is_some_and(|item| item.item_id() == opened.entity_id()))
+                    .then(|| pane.close_item_by_id(previous_id, SaveIntent::Close, window, cx))
+                })?;
+                if let Some(close) = close {
+                    close.await?;
+                }
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_notify_err(self.workspace.clone(), window, cx);
+    }
+
+    fn render_more_menu(&self, cx: &Context<Self>) -> impl IntoElement {
+        let diff = cx.weak_entity();
+        PopoverMenu::new("solo-diff-more")
+            .anchor(PopoverAnchor::TopRight)
+            .trigger(
+                IconButton::new("solo-diff-more-trigger", IconName::Ellipsis)
+                    .icon_size(IconSize::Small)
+                    .aria_label(t!("More Diff Actions"))
+                    .tooltip(Tooltip::text(t!("More Diff Actions"))),
+            )
+            .menu(move |window, cx| {
+                let view = diff.upgrade()?;
+                let states = view.read(cx).button_states(cx);
+                let focus = view.focus_handle(cx);
+                let stage_view = diff.clone();
+                let unstage_view = diff.clone();
+                Some(ContextMenu::build(window, cx, |menu, _, _| {
+                    menu.context(focus)
+                        .map(|menu| {
+                            if states.selection {
+                                menu.action_disabled_when(
+                                    !states.stage && !states.unstage,
+                                    t!("Toggle Staged"),
+                                    ToggleStaged.boxed_clone(),
+                                )
+                            } else {
+                                menu.action_disabled_when(
+                                    !states.stage,
+                                    t!("Stage and Go to Next Hunk"),
+                                    StageAndNext.boxed_clone(),
+                                )
+                                .action_disabled_when(
+                                    !states.unstage,
+                                    t!("Unstage and Go to Next Hunk"),
+                                    UnstageAndNext.boxed_clone(),
+                                )
+                            }
+                        })
+                        .action_disabled_when(
+                            !states.restore,
+                            t!("Restore Hunk"),
+                            Restore.boxed_clone(),
+                        )
+                        .separator()
+                        .when(states.stage_file, |menu| {
+                            menu.entry(
+                                t!("Stage All"),
+                                Some(StageFile.boxed_clone()),
+                                move |window, cx| {
+                                    stage_view
+                                        .update(cx, |view, cx| {
+                                            view.change_file_stage(true, window, cx)
+                                        })
+                                        .log_err();
+                                },
+                            )
+                        })
+                        .when(states.unstage_file, |menu| {
+                            menu.entry(
+                                t!("Unstage All"),
+                                Some(UnstageFile.boxed_clone()),
+                                move |window, cx| {
+                                    unstage_view
+                                        .update(cx, |view, cx| {
+                                            view.change_file_stage(false, window, cx)
+                                        })
+                                        .log_err();
+                                },
+                            )
+                        })
+                        .action(t!("Commit"), Commit.boxed_clone())
+                }))
+            })
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let repository = self.repository.read(cx);
+        let split_editor = self.editor.read(cx);
+        let split_ratio = split_editor.split_ratio(cx);
+        let editor = split_editor.rhs_editor().read(cx);
+        let buffer = self.buffer.read(cx);
+        let file_exists = buffer
+            .file()
+            .is_some_and(|file| !file.disk_state().is_deleted());
+        let diff = self.diff.read(cx).snapshot(cx);
+        let (added, removed) = diff.changed_row_counts();
+        let snapshot = editor.buffer().read(cx).snapshot(cx);
+        let caret = editor.selections.newest_anchor().head();
+        let (current_change, changes) =
+            snapshot
+                .diff_hunks()
+                .fold((0, 0), |(current, count), hunk| {
+                    let count = count + 1;
+                    let current = if caret.cmp(&hunk.multi_buffer_range.start, &snapshot).is_ge() {
+                        count
+                    } else {
+                        current
+                    };
+                    (current, count)
+                });
+        let mut previous_file = None;
+        let mut next_file = None;
+        for entry in repository.status() {
+            if repository
+                .repo_path_to_project_path(&entry.repo_path, cx)
+                .is_none()
+            {
+                continue;
+            }
+            match entry.repo_path.cmp(&self.repo_path) {
+                std::cmp::Ordering::Less => previous_file = Some(entry.repo_path),
+                std::cmp::Ordering::Greater => {
+                    next_file = Some(entry.repo_path);
+                    break;
+                }
+                std::cmp::Ordering::Equal => {}
+            }
+        }
+
+        let path: SharedString = self
+            .repo_path
+            .display(repository.path_style)
+            .into_owned()
+            .into();
+        let head = if diff.base_text_exists() {
+            repository
+                .head_commit
+                .as_ref()
+                .map(|commit| commit.short_sha())
+        } else {
+            Some(t!("File absent"))
+        };
+        let working_copy_detail = if !file_exists {
+            Some(t!("File absent"))
+        } else if buffer.is_dirty() {
+            Some(t!("Unsaved"))
+        } else {
+            None
+        };
+        let left_version = h_flex()
+            .min_w_0()
+            .gap_1()
+            .child(
+                Icon::new(IconName::FileLock)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(Label::new("HEAD").size(LabelSize::Small))
+            .children(head.map(|head| {
+                Label::new(format!("· {head}"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+            }));
+        let right_version = h_flex()
+            .min_w_0()
+            .gap_1()
+            .child(Label::new(t!("Working Tree")).size(LabelSize::Small))
+            .children(working_copy_detail.map(|detail| {
+                Label::new(format!("· {detail}"))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted)
+            }));
+        let file_path = Label::new(path)
+            .size(LabelSize::Small)
+            .color(Color::Muted)
+            .truncate_middle();
+        let focus = self.focus_handle(cx);
+        let split = split_editor.diff_view_style() == DiffViewStyle::Split;
+
+        h_flex()
+            .id("solo-diff-header")
+            .flex_none()
+            .w_full()
+            .min_h_8()
+            .px_2()
+            .gap_2()
+            .border_b_1()
+            .border_color(cx.theme().colors().border_variant)
+            .bg(cx.theme().colors().editor_background)
+            .map(|header| {
+                if let Some(ratio) = split_ratio {
+                    header
+                        .child(
+                            h_flex()
+                                .w(relative(ratio))
+                                .flex_shrink_1()
+                                .min_w_0()
+                                .gap_2()
+                                .overflow_hidden()
+                                .child(left_version)
+                                .child(file_path),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .child(right_version),
+                        )
+                } else {
+                    header.child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .overflow_hidden()
+                            .child(left_version)
+                            .child(Label::new("→").size(LabelSize::Small).color(Color::Muted))
+                            .child(right_version)
+                            .child(file_path),
+                    )
+                }
+            })
+            .child(
+                h_flex()
+                    .flex_none()
+                    .gap_1()
+                    .map(|header| {
+                        if changes == 0 {
+                            header.child(
+                                Label::new(t!("No Changes"))
+                                    .size(LabelSize::Small)
+                                    .color(Color::Muted),
+                            )
+                        } else {
+                            header
+                                .child(
+                                    Label::new(format!("{} / {changes}", current_change.max(1)))
+                                        .size(LabelSize::Small)
+                                        .color(Color::Muted),
+                                )
+                                .child(DiffStat::new(
+                                    "solo-diff-stat",
+                                    added as usize,
+                                    removed as usize,
+                                ))
+                        }
+                    })
+                    .child(
+                        IconButton::new("solo-diff-open-file", IconName::ArrowUpRight)
+                            .icon_size(IconSize::Small)
+                            .disabled(!file_exists)
+                            .aria_label(t!("Open File"))
+                            .tooltip(Tooltip::text(t!("Open File")))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dispatch_action(&OpenExcerpts, window, cx);
+                            })),
+                    )
+                    .child(
+                        IconButton::new("solo-diff-previous-change", IconName::ChevronUp)
+                            .icon_size(IconSize::Small)
+                            .disabled(changes == 0)
+                            .aria_label(t!("Go to Previous Hunk"))
+                            .tooltip(Tooltip::for_action_title_in(
+                                t!("Go to Previous Hunk"),
+                                &GoToPreviousHunk,
+                                &focus,
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dispatch_action(&GoToPreviousHunk, window, cx);
+                            })),
+                    )
+                    .child(
+                        IconButton::new("solo-diff-next-change", IconName::ChevronDown)
+                            .icon_size(IconSize::Small)
+                            .disabled(changes == 0)
+                            .aria_label(t!("Go to Next Hunk"))
+                            .tooltip(Tooltip::for_action_title_in(
+                                t!("Go to Next Hunk"),
+                                &GoToHunk,
+                                &focus,
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.dispatch_action(&GoToHunk, window, cx);
+                            })),
+                    )
+                    .children(
+                        [
+                            (
+                                "solo-diff-previous-file",
+                                IconName::ChevronLeft,
+                                t!("Previous Changed File"),
+                                previous_file,
+                            ),
+                            (
+                                "solo-diff-next-file",
+                                IconName::ChevronRight,
+                                t!("Next Changed File"),
+                                next_file,
+                            ),
+                        ]
+                        .map(|(id, icon, label, path)| {
+                            IconButton::new(id, icon)
+                                .icon_size(IconSize::Small)
+                                .disabled(path.is_none() || self.navigating_files)
+                                .aria_label(label.clone())
+                                .tooltip(Tooltip::text(label))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if let Some(path) = &path {
+                                        this.open_adjacent_file(path.clone(), window, cx);
+                                    }
+                                }))
+                        }),
+                    )
+                    .child(
+                        IconButton::new(
+                            "solo-diff-toggle-excerpts",
+                            if self.showing_full_file {
+                                IconName::ChevronDownUp
+                            } else {
+                                IconName::ChevronUpDown
+                            },
+                        )
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text(if self.showing_full_file {
+                            t!("Show Changes Only")
+                        } else {
+                            t!("Show Full File")
+                        }))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.set_showing_full_file(!this.showing_full_file, cx);
+                        })),
+                    )
+                    .child(
+                        IconButton::new(
+                            "solo-diff-layout",
+                            if split {
+                                IconName::DiffUnified
+                            } else {
+                                IconName::DiffSplit
+                            },
+                        )
+                        .icon_size(IconSize::Small)
+                        .tooltip(Tooltip::text(if split {
+                            t!("Unified")
+                        } else {
+                            t!("Split")
+                        }))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                let style = if split {
+                                    DiffViewStyle::Unified
+                                } else {
+                                    DiffViewStyle::Split
+                                };
+                                DiffStyleControls::set_diff_view_style(
+                                    &this.editor,
+                                    style,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    )
+                    .child(self.render_more_menu(cx)),
+            )
+    }
 }
 
 impl EventEmitter<EditorEvent> for SoloDiffView {}
@@ -368,6 +777,138 @@ impl EventEmitter<EditorEvent> for SoloDiffView {}
 impl Focusable for SoloDiffView {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.editor.focus_handle(cx)
+    }
+}
+
+impl Render for SoloDiffView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex().size_full().child(self.render_header(cx)).child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(self.editor.clone()),
+        )
+    }
+}
+
+struct SoloDiffButtonStates {
+    stage: bool,
+    unstage: bool,
+    restore: bool,
+    selection: bool,
+    stage_file: bool,
+    unstage_file: bool,
+}
+
+struct CompactHunkControls(WeakEntity<SplittableEditor>);
+
+impl DiffHunkRenderer for CompactHunkControls {
+    fn show_controls_for_inactive_hunks(&self, cx: &App) -> bool {
+        ProjectSettings::get_global(cx)
+            .git
+            .show_stage_restore_buttons
+    }
+
+    fn render_hunk_controls(
+        &self,
+        row: u32,
+        status: &DiffHunkStatus,
+        hunk_range: Range<multi_buffer::Anchor>,
+        is_created_file: bool,
+        line_height: Pixels,
+        editor: &Entity<Editor>,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        if !ProjectSettings::get_global(cx)
+            .git
+            .show_stage_restore_buttons
+        {
+            return gpui::Empty.into_any_element();
+        }
+        let Some(operations) = hunk_range
+            .start
+            .buffer_id()
+            .and_then(|id| editor.read(cx).buffer().read(cx).diff_for(id))
+            .and_then(|diff| diff.read(cx).operations())
+        else {
+            return gpui::Empty.into_any_element();
+        };
+        let stage = status.has_secondary_hunk();
+        let split_side = self
+            .0
+            .upgrade()
+            .and_then(|split| split.read(cx).lhs_editor().map(|lhs| lhs == editor));
+        let can_toggle = split_side != Some(true)
+            && if stage {
+                operations.supports_staging()
+            } else {
+                operations.supports_unstaging()
+            };
+        let can_restore =
+            operations.supports_restore() && !is_created_file && split_side != Some(false);
+        let toggle_title = if stage {
+            t!("Stage Hunk")
+        } else {
+            t!("Unstage Hunk")
+        };
+        let toggle_icon = match status.secondary {
+            DiffHunkSecondaryStatus::OverlapsWithSecondaryHunk => IconName::SquareMinus,
+            _ if stage => IconName::SquarePlus,
+            _ => IconName::Check,
+        };
+        let start = hunk_range.start;
+        h_flex()
+            .h(line_height)
+            .gap_0p5()
+            .mr_1()
+            .block_mouse_except_scroll()
+            .when(can_restore, |controls| {
+                controls.child(
+                    IconButton::new(("solo-diff-restore-hunk", row as u64), IconName::ArrowRight)
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Accent)
+                        .aria_label(t!("Restore Hunk"))
+                        .tooltip(Tooltip::text(t!("Restore Hunk")))
+                        .on_click({
+                            let editor = editor.clone();
+                            move |_, window, cx| {
+                                editor.update(cx, |editor, cx| {
+                                    editor.restore_diff_hunks_in_ranges(
+                                        vec![start..start],
+                                        window,
+                                        cx,
+                                    );
+                                })
+                            }
+                        }),
+                )
+            })
+            .when(can_toggle, |controls| {
+                controls.child(
+                    IconButton::new(("solo-diff-stage-hunk", row as u64), toggle_icon)
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Accent)
+                        .disabled(status.is_pending())
+                        .aria_label(toggle_title.clone())
+                        .tooltip(Tooltip::text(toggle_title))
+                        .on_click({
+                            let editor = editor.clone();
+                            move |_, window, cx| {
+                                editor.update(cx, |editor, cx| {
+                                    editor.stage_or_unstage_diff_hunks(
+                                        stage,
+                                        vec![start..start],
+                                        window,
+                                        cx,
+                                    );
+                                })
+                            }
+                        }),
+                )
+            })
+            .into_any_element()
     }
 }
 
@@ -481,41 +1022,7 @@ impl Item for SoloDiffView {
     }
 
     fn breadcrumb_location(&self, _: &App) -> ToolbarItemLocation {
-        ToolbarItemLocation::PrimaryLeft
-    }
-
-    fn breadcrumbs(&self, cx: &App) -> Option<(Vec<HighlightedText>, Option<gpui::Font>)> {
-        let text: SharedString = self
-            .repo_path
-            .as_ref()
-            .display(PathStyle::local())
-            .into_owned()
-            .into();
-
-        // When the git panel is set to convey status via label color rather
-        // than an icon, tint the whole path like multibuffer headers do.
-        let mut highlights = Vec::new();
-        if GitPanelSettings::get_global(cx).status_style == StatusStyle::LabelColor
-            && let Some(status) = self
-                .repository
-                .read(cx)
-                .status_for_path(&self.repo_path)
-                .map(|entry| entry.status)
-        {
-            highlights.push((
-                0..text.len(),
-                HighlightStyle::color(file_status_label_color(Some(status)).color(cx)),
-            ));
-        }
-
-        Some((
-            vec![HighlightedText { text, highlights }],
-            Some(
-                theme_settings::ThemeSettings::get_global(cx)
-                    .buffer_font
-                    .clone(),
-            ),
-        ))
+        ToolbarItemLocation::Hidden
     }
 
     fn added_to_workspace(
@@ -535,6 +1042,10 @@ impl Item for SoloDiffView {
         self.editor.read(cx).rhs_editor().read(cx).can_save(cx)
     }
 
+    fn is_dirty(&self, cx: &App) -> bool {
+        self.buffer.read(cx).is_dirty()
+    }
+
     fn save(
         &mut self,
         options: SaveOptions,
@@ -544,171 +1055,6 @@ impl Item for SoloDiffView {
     ) -> Task<Result<()>> {
         self.editor.save(options, project, window, cx)
     }
-}
-
-impl Render for SoloDiffView {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        self.editor.clone()
-    }
-}
-
-pub struct SoloDiffStyleToolbar {
-    solo_diff: Option<WeakEntity<SoloDiffView>>,
-}
-
-pub struct SoloDiffGitToolbar {
-    solo_diff: Option<WeakEntity<SoloDiffView>>,
-}
-
-impl SoloDiffStyleToolbar {
-    pub fn new(_: &mut Context<Self>) -> Self {
-        Self { solo_diff: None }
-    }
-
-    fn solo_diff(&self) -> Option<Entity<SoloDiffView>> {
-        self.solo_diff.as_ref()?.upgrade()
-    }
-
-    fn toggle_showing_full_file(&mut self, cx: &mut Context<Self>) {
-        if let Some(solo_diff) = self.solo_diff() {
-            solo_diff.update(cx, |solo_diff, cx| {
-                solo_diff.set_showing_full_file(!solo_diff.showing_full_file, cx);
-            });
-        }
-    }
-}
-
-impl EventEmitter<ToolbarItemEvent> for SoloDiffStyleToolbar {}
-
-impl ToolbarItemView for SoloDiffStyleToolbar {
-    fn set_active_pane_item(
-        &mut self,
-        active_pane_item: Option<&dyn ItemHandle>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> ToolbarItemLocation {
-        self.solo_diff = active_pane_item
-            .and_then(|item| item.act_as::<SoloDiffView>(cx))
-            .map(|entity| entity.downgrade());
-        if self.solo_diff.is_some() {
-            ToolbarItemLocation::PrimaryLeft
-        } else {
-            ToolbarItemLocation::Hidden
-        }
-    }
-}
-
-impl Render for SoloDiffStyleToolbar {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(solo_diff) = self.solo_diff() else {
-            return Empty.into_any_element();
-        };
-
-        let (editor_entity, showing_full_file, status) = {
-            let solo_diff = solo_diff.read(cx);
-            (
-                solo_diff.editor.clone(),
-                solo_diff.showing_full_file,
-                solo_diff
-                    .repository
-                    .read(cx)
-                    .status_for_path(&solo_diff.repo_path)
-                    .map(|entry| entry.status),
-            )
-        };
-
-        let show_status_icon =
-            GitPanelSettings::get_global(cx).status_style != StatusStyle::LabelColor;
-
-        let (expand_icon, expand_tooltip) = if showing_full_file {
-            (IconName::ChevronDownUp, t!("Show Changes Only"))
-        } else {
-            (IconName::ChevronUpDown, t!("Show Full File"))
-        };
-
-        h_flex()
-            .pl_0p5()
-            .gap_1()
-            .child(
-                IconButton::new("solo-diff-toggle-excerpts", expand_icon)
-                    .icon_size(IconSize::Small)
-                    .tooltip(Tooltip::text(expand_tooltip))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_showing_full_file(cx);
-                    })),
-            )
-            .child(DiffStyleControls::new(editor_entity))
-            .child(Divider::vertical().mr_1())
-            .when_some(
-                show_status_icon.then_some(status).flatten(),
-                |this, status| this.child(git_status_icon(status)),
-            )
-            .into_any_element()
-    }
-}
-
-impl SoloDiffGitToolbar {
-    pub fn new(_: &mut Context<Self>) -> Self {
-        Self { solo_diff: None }
-    }
-
-    fn solo_diff(&self) -> Option<Entity<SoloDiffView>> {
-        self.solo_diff.as_ref()?.upgrade()
-    }
-
-    fn dispatch_action(&self, action: &dyn Action, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(solo_diff) = self.solo_diff() {
-            solo_diff.update(cx, |solo_diff, cx| {
-                solo_diff.dispatch_action(action, window, cx);
-            });
-        }
-    }
-
-    fn stage_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(solo_diff) = self.solo_diff() {
-            solo_diff.update(cx, |solo_diff, cx| {
-                solo_diff.change_file_stage(true, window, cx);
-            });
-        }
-    }
-
-    fn unstage_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(solo_diff) = self.solo_diff() {
-            solo_diff.update(cx, |solo_diff, cx| {
-                solo_diff.change_file_stage(false, window, cx);
-            });
-        }
-    }
-}
-
-impl EventEmitter<ToolbarItemEvent> for SoloDiffGitToolbar {}
-
-impl ToolbarItemView for SoloDiffGitToolbar {
-    fn set_active_pane_item(
-        &mut self,
-        active_pane_item: Option<&dyn ItemHandle>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> ToolbarItemLocation {
-        self.solo_diff = active_pane_item
-            .and_then(|item| item.act_as::<SoloDiffView>(cx))
-            .map(|entity| entity.downgrade());
-        if self.solo_diff.is_some() {
-            ToolbarItemLocation::PrimaryRight
-        } else {
-            ToolbarItemLocation::Hidden
-        }
-    }
-}
-
-struct SoloDiffButtonStates {
-    stage: bool,
-    unstage: bool,
-    restore: bool,
-    prev_next: bool,
-    selection: bool,
-    stage_file: bool,
-    unstage_file: bool,
 }
 
 #[cfg(test)]
@@ -749,153 +1095,5 @@ mod tests {
         assert!(!is_singleton);
         assert_eq!(buffer_count, 1);
         assert!(has_expand_controls);
-    }
-}
-
-impl Render for SoloDiffGitToolbar {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(solo_diff) = self.solo_diff() else {
-            return gpui::Empty.into_any_element();
-        };
-
-        let focus_handle = solo_diff.focus_handle(cx);
-        let solo_diff = solo_diff.read(cx);
-        let button_states = solo_diff.button_states(cx);
-        let status_entry = solo_diff
-            .repository
-            .read(cx)
-            .status_for_path(&solo_diff.repo_path);
-        let diff_stat = status_entry.and_then(|entry| entry.diff_stat);
-
-        h_flex()
-            .my_neg_1()
-            .py_1()
-            .gap_1p5()
-            .flex_wrap()
-            .justify_between()
-            .children(diff_stat.map(|stat| {
-                DiffStat::new("solo-diff-stat", stat.added as usize, stat.deleted as usize)
-            }))
-            .child(Divider::vertical().ml_1())
-            .child(
-                h_group_sm()
-                    .child(
-                        IconButton::new("up", IconName::ArrowUp)
-                            .icon_size(IconSize::Small)
-                            .disabled(!button_states.prev_next)
-                            .tooltip(Tooltip::for_action_title_in(
-                                "Go to Previous Hunk",
-                                &GoToPreviousHunk,
-                                &focus_handle,
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch_action(&GoToPreviousHunk, window, cx)
-                            })),
-                    )
-                    .child(
-                        IconButton::new("down", IconName::ArrowDown)
-                            .icon_size(IconSize::Small)
-                            .disabled(!button_states.prev_next)
-                            .tooltip(Tooltip::for_action_title_in(
-                                "Go to Next Hunk",
-                                &GoToHunk,
-                                &focus_handle,
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch_action(&GoToHunk, window, cx)
-                            })),
-                    ),
-            )
-            .child(Divider::vertical())
-            .child(
-                h_group_sm()
-                    .when(button_states.selection, |el| {
-                        el.child(
-                            Button::new("stage", "Toggle Staged")
-                                .disabled(!button_states.stage && !button_states.unstage)
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Toggle Staged",
-                                    &ToggleStaged,
-                                    &focus_handle,
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&ToggleStaged, window, cx)
-                                })),
-                        )
-                    })
-                    .when(!button_states.selection, |el| {
-                        el.child(
-                            Button::new("stage", "Stage")
-                                .disabled(!button_states.stage)
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Stage and Go to Next Hunk",
-                                    &StageAndNext,
-                                    &focus_handle,
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&StageAndNext, window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("unstage", "Unstage")
-                                .disabled(!button_states.unstage)
-                                .tooltip(Tooltip::for_action_title_in(
-                                    "Unstage and Go to Next Hunk",
-                                    &UnstageAndNext,
-                                    &focus_handle,
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.dispatch_action(&UnstageAndNext, window, cx)
-                                })),
-                        )
-                    })
-                    .child(
-                        Button::new("restore", "Restore")
-                            .tooltip(Tooltip::for_action_title_in(
-                                "Restore selected hunk",
-                                &Restore,
-                                &focus_handle,
-                            ))
-                            .disabled(!button_states.restore)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.dispatch_action(&Restore, window, cx)
-                            })),
-                    ),
-            )
-            .child(Divider::vertical())
-            .child(h_group_sm().child(if button_states.stage_file {
-                Button::new("stage-file", "Stage All")
-                    .width(rems_from_px(80_f32))
-                    .disabled(!button_states.stage_file)
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Stage All",
-                        &StageFile,
-                        &focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| this.stage_file(window, cx)))
-            } else {
-                Button::new("unstage-file", "Unstage All")
-                    .width(rems_from_px(80_f32))
-                    .disabled(!button_states.unstage_file)
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Unstage All",
-                        &UnstageFile,
-                        &focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| this.unstage_file(window, cx)))
-            }))
-            .child(Divider::vertical())
-            .child(
-                Button::new("commit", "Commit")
-                    .tooltip(Tooltip::for_action_title_in(
-                        "Commit",
-                        &Commit,
-                        &focus_handle,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.dispatch_action(&Commit, window, cx);
-                    })),
-            )
-            .into_any_element()
     }
 }

@@ -9003,36 +9003,6 @@ impl LspStore {
         summary
     }
 
-    /// Returns the diagnostic summary for a specific project path.
-    pub fn diagnostic_summary_for_path(
-        &self,
-        project_path: &ProjectPath,
-        _: &App,
-    ) -> DiagnosticSummary {
-        if let Some(summaries) = self
-            .diagnostic_summaries
-            .get(&project_path.worktree_id)
-            .and_then(|map| map.get(&project_path.path))
-        {
-            let (error_count, warning_count) = summaries.iter().fold(
-                (0, 0),
-                |(error_count, warning_count), (_language_server_id, summary)| {
-                    (
-                        error_count + summary.error_count,
-                        warning_count + summary.warning_count,
-                    )
-                },
-            );
-
-            DiagnosticSummary {
-                error_count,
-                warning_count,
-            }
-        } else {
-            DiagnosticSummary::default()
-        }
-    }
-
     pub fn diagnostic_summaries<'a>(
         &'a self,
         include_ignored: bool,
@@ -11102,9 +11072,8 @@ impl LspStore {
 
     // After saving a buffer using a language server that doesn't provide a disk-based progress token,
     // kick off a timer that will reset every time the buffer is saved. If the timer eventually fires,
-    // simulate disk-based diagnostics being finished so that other pieces of UI (e.g., project
-    // diagnostics view, diagnostic status bar) can update. We don't emit an event right away because
-    // the language server might take some time to publish diagnostics.
+    // simulate disk-based diagnostics being finished so file and tab badges can update.
+    // The delay gives the language server time to publish diagnostics.
     fn simulate_disk_based_diagnostics_events_if_needed(
         &mut self,
         language_server_id: LanguageServerId,

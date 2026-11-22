@@ -104,7 +104,7 @@ use language::{
 };
 
 use multi_buffer::{
-    Anchor, AnchorRangeExt, MultiBuffer, MultiBufferOffset, MultiBufferOffsetUtf16,
+    Anchor, AnchorRangeExt, MultiBuffer, MultiBufferDiffHunk, MultiBufferOffset, MultiBufferOffsetUtf16,
     MultiBufferPoint, MultiBufferRow, MultiBufferSnapshot, RowInfo, ToOffset, ToPoint,
 };
 use project::project_settings::DiagnosticSeverity;
@@ -128,11 +128,12 @@ use std::{
     iter,
     num::NonZeroU32,
     ops::{self, Add, Range, Sub},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use crate::{
     EditorStyle, RowExt, hover_links::InlayHighlight, inlays::Inlay, movement::TextLayoutDetails,
+    scroll::DiffScrollMap,
 };
 use block_map::{BlockPointCursor, BlockRow, BlockSnapshot};
 use fold_map::{FoldPointCursor, FoldSnapshot};
@@ -244,14 +245,16 @@ pub struct DisplayMap {
 
 pub(crate) struct Companion {
     rhs_display_map_id: EntityId,
+    pub(crate) align_rows: bool,
     rhs_custom_block_to_balancing_block: RefCell<HashMap<CustomBlockId, CustomBlockId>>,
     lhs_custom_block_to_balancing_block: RefCell<HashMap<CustomBlockId, CustomBlockId>>,
 }
 
 impl Companion {
-    pub(crate) fn new(rhs_display_map_id: EntityId) -> Self {
+    pub(crate) fn new(rhs_display_map_id: EntityId, align_rows: bool) -> Self {
         Self {
             rhs_display_map_id,
+            align_rows,
             rhs_custom_block_to_balancing_block: Default::default(),
             lhs_custom_block_to_balancing_block: Default::default(),
         }
@@ -511,7 +514,8 @@ impl DisplayMap {
                 self.block_map.folded_buffers.remove(&buffer_id);
             }
 
-            for block in all_blocks {
+            let align_rows = companion.read(cx).align_rows;
+            for block in all_blocks.into_iter().filter(|_| align_rows) {
                 let Some(their_block) = block_map::balancing_block(
                     &block.properties(),
                     snapshot.buffer(),
@@ -580,6 +584,9 @@ impl DisplayMap {
         let Some(companion_display_map) = companion_display_map.upgrade() else {
             return callback(None, cx);
         };
+        if !companion.read(cx).align_rows {
+            return callback(None, cx);
+        }
         companion_display_map.update(cx, |companion_display_map, cx| {
             let (companion_wrap_snapshot, companion_wrap_edits) =
                 companion_display_map.sync_through_wrap(cx);
@@ -610,7 +617,11 @@ impl DisplayMap {
                 .update(cx, |dm, cx| dm.sync_through_wrap(cx))
                 .ok()
         });
-        let companion_ref = self.companion.as_ref().map(|(_, c)| c.read(cx));
+        let companion_ref = self
+            .companion
+            .as_ref()
+            .map(|(_, companion)| companion.read(cx))
+            .filter(|companion| companion.align_rows);
         let companion_view = companion_wrap_data.as_ref().zip(companion_ref).map(
             |((snapshot, edits), companion)| {
                 CompanionView::new(self.entity_id, snapshot, edits, companion)
@@ -629,7 +640,11 @@ impl DisplayMap {
         if let Some((companion_dm, _)) = &self.companion {
             let _ = companion_dm.update(cx, |dm, _cx| {
                 if let Some((companion_snapshot, companion_edits)) = companion_wrap_data {
-                    let their_companion_ref = dm.companion.as_ref().map(|(_, c)| c.read(_cx));
+                    let their_companion_ref = dm
+                        .companion
+                        .as_ref()
+                        .map(|(_, companion)| companion.read(_cx))
+                        .filter(|companion| companion.align_rows);
                     dm.block_map.read(
                         companion_snapshot,
                         companion_edits,
@@ -655,6 +670,11 @@ impl DisplayMap {
         DisplaySnapshot {
             display_map_id: self.entity_id,
             companion_display_snapshot,
+            diff_scroll_map: self.companion.as_ref().and_then(|(_, companion)| {
+                let companion = companion.read(cx);
+                (!companion.align_rows)
+                    .then(|| (companion.is_rhs(self.entity_id), Arc::new(OnceLock::new())))
+            }),
             block_snapshot,
             diagnostics_max_severity: self.diagnostics_max_severity,
             crease_snapshot: self.crease_map.snapshot(),
@@ -679,6 +699,7 @@ impl DisplayMap {
         DisplaySnapshot {
             display_map_id: self.entity_id,
             companion_display_snapshot: None,
+            diff_scroll_map: None,
             block_snapshot,
             diagnostics_max_severity: self.diagnostics_max_severity,
             crease_snapshot: self.crease_map.snapshot(),
@@ -1496,6 +1517,7 @@ impl<'a> HighlightedChunk<'a> {
 pub struct DisplaySnapshot {
     pub display_map_id: EntityId,
     pub companion_display_snapshot: Option<Arc<DisplaySnapshot>>,
+    diff_scroll_map: Option<(bool, Arc<OnceLock<DiffScrollMap>>)>,
     pub crease_snapshot: CreaseSnapshot,
     block_snapshot: BlockSnapshot,
     text_highlights: TextHighlights,
@@ -1513,6 +1535,28 @@ pub struct DisplaySnapshot {
 impl DisplaySnapshot {
     pub fn companion_snapshot(&self) -> Option<&DisplaySnapshot> {
         self.companion_display_snapshot.as_deref()
+    }
+
+    pub(crate) fn diff_scroll_map(&self) -> Option<(&DiffScrollMap, usize)> {
+        let (is_rhs, map) = self.diff_scroll_map.as_ref()?;
+        let companion = self.companion_snapshot()?;
+        let sides = if *is_rhs { [companion, self] } else { [self, companion] };
+        Some((map.get_or_init(|| DiffScrollMap::new(sides)), usize::from(*is_rhs)))
+    }
+
+    pub(crate) fn diff_hunk_display_rows(&self, hunk: &MultiBufferDiffHunk) -> Range<DisplayRow> {
+        let start = self
+            .point_to_display_point(Point::new(hunk.row_range.start.0, 0), Bias::Left)
+            .row();
+        if hunk.row_range.is_empty() {
+            return start..start;
+        }
+        let last = MultiBufferRow(hunk.row_range.end.0 - 1);
+        let length = self.buffer_snapshot().line_len(last);
+        let end = self
+            .point_to_display_point(Point::new(last.0, length), Bias::Right)
+            .row();
+        start..end.next_row()
     }
 
     fn diagnostic_severity_is_visible(&self, severity: lsp::DiagnosticSeverity) -> bool {

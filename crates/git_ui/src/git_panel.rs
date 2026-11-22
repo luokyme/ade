@@ -2757,7 +2757,7 @@ impl GitPanel {
                 .clone();
             let repository = self.active_repository.clone()?;
 
-            SoloDiffView::open_or_focus(entry, repository, self.workspace.clone(), window, cx)
+            SoloDiffView::open_or_focus(entry.repo_path, repository, self.workspace.clone(), window, cx)
                 .detach_and_notify_err(self.workspace.clone(), window, cx);
 
             Some(())

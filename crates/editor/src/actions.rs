@@ -878,7 +878,7 @@ actions!(
         BlameRevision,
         /// Opens a blame of the file at the revision preceding the blame entry at cursor.
         BlamePreviousRevision,
-        /// Toggles the diagnostics panel.
+        /// Toggles diagnostics in the current editor.
         ToggleDiagnostics,
         /// Toggles indent guides display.
         ToggleIndentGuides,

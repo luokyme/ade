@@ -453,7 +453,11 @@ impl EditorElement {
                         editor.update(cx, |editor, cx| {
                             let line_height = position_map.line_height;
                             let glyph_width = position_map.em_layout_width;
-                            let delta = match delta {
+                            let connected_diff = position_map.snapshot.diff_scroll_map().is_some();
+                            // The shared diff position advances even if one pane is stationary
+                            // inside a deletion, so apply each wheel event to that position.
+                            let wheel_delta = if connected_diff { event.delta } else { delta };
+                            let delta = match wheel_delta {
                                 gpui::ScrollDelta::Pixels(mut pixels) => {
                                     //Trackpad
                                     editor
@@ -477,6 +481,18 @@ impl EditorElement {
                                 * ScrollPixelOffset::from(line_height)
                                 - ScrollPixelOffset::from(delta.y * scroll_sensitivity))
                                 / ScrollPixelOffset::from(line_height);
+                            if connected_diff {
+                                editor.apply_scroll_delta(
+                                    point(
+                                        (x.clamp(0., position_map.scroll_max.x) - current_scroll_position.x) as f32,
+                                        (y - current_scroll_position.y) as f32,
+                                    ),
+                                    window,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                                return;
+                            }
                             let mut scroll_position =
                                 point(x, y).clamp(&point(0., 0.), &position_map.scroll_max);
                             let forbid_vertical_scroll =

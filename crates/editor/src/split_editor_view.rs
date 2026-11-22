@@ -1,13 +1,13 @@
-use std::cmp;
+use std::{cmp, ops::Range};
 
 use collections::{HashMap, HashSet};
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, Context, DragMoveEvent, Element,
     Entity, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Length,
-    ParentElement, Pixels, StatefulInteractiveElement, Styled, TextStyleRefinement, Window, div,
-    linear_color_stop, linear_gradient, point, px, size,
+    ParentElement, PathBuilder, Pixels, StatefulInteractiveElement, Styled, TextStyleRefinement,
+    Window, canvas, div, linear_color_stop, linear_gradient, point, px, size,
 };
-use multi_buffer::{Anchor, ExcerptBoundaryInfo};
+use multi_buffer::{Anchor, ExcerptBoundaryInfo, MultiBufferDiffHunk};
 use smallvec::smallvec;
 use text::BufferId;
 use theme::ActiveTheme;
@@ -25,6 +25,7 @@ use crate::{
 };
 
 const RESIZE_HANDLE_WIDTH: f32 = 8.0;
+const CHANGE_CONNECTION_WIDTH: Pixels = px(56.);
 
 #[derive(Debug, Clone)]
 struct DraggedSplitHandle;
@@ -57,7 +58,7 @@ impl SplitEditorState {
         &mut self,
         drag_event: &DragMoveEvent<DraggedSplitHandle>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         let drag_position = drag_event.event.position;
         let bounds = drag_event.bounds;
@@ -72,6 +73,7 @@ impl SplitEditorState {
 
         let new_ratio = (drag_position.x - bounds.left()) / bounds_width;
         self.visible_left_ratio = new_ratio.clamp(min_ratio, max_ratio);
+        cx.notify();
     }
 
     fn commit_ratio(&mut self) {
@@ -107,6 +109,7 @@ impl SplitEditorView {
 
 fn render_resize_handle(
     state: &Entity<SplitEditorState>,
+    width: Pixels,
     separator_color: Hsla,
     _window: &mut Window,
     _cx: &mut App,
@@ -118,21 +121,22 @@ fn render_resize_handle(
         .relative()
         .h_full()
         .flex_shrink_0()
-        .w(px(1.))
+        .w(width)
         .bg(separator_color)
         .child(
             div()
                 .id("split-resize-handle")
                 .absolute()
-                .left(px(-RESIZE_HANDLE_WIDTH / 2.0))
+                .left((width - px(RESIZE_HANDLE_WIDTH)) / 2.)
                 .w(px(RESIZE_HANDLE_WIDTH))
                 .h_full()
                 .cursor_col_resize()
                 .block_mouse_except_scroll()
                 .on_click(move |event, _, cx| {
                     if event.click_count() >= 2 {
-                        state_for_click.update(cx, |state, _| {
+                        state_for_click.update(cx, |state, cx| {
                             state.on_double_click();
+                            cx.notify();
                         });
                     }
                     cx.stop_propagation();
@@ -153,19 +157,46 @@ impl RenderOnce for SplitEditorView {
 
         let lhs_editor = splittable_editor.lhs_editor().unwrap().clone();
         let rhs_editor = splittable_editor.rhs_editor().clone();
+        let show_connections = splittable_editor.shows_change_connections();
 
         let mut lhs = EditorElement::new(&lhs_editor, self.style.clone());
         let mut rhs = EditorElement::new(&rhs_editor, self.style.clone());
 
         lhs.set_split_side(SplitSide::Left);
         rhs.set_split_side(SplitSide::Right);
+        if show_connections {
+            lhs.use_change_connections();
+            rhs.use_change_connections();
+        }
 
         let left_ratio = self.split_state.read(cx).left_ratio();
         let right_ratio = self.split_state.read(cx).right_ratio();
 
-        let separator_color = cx.theme().colors().border_variant;
-
-        let resize_handle = render_resize_handle(&self.split_state, separator_color, window, cx);
+        let colors = cx.theme().colors();
+        let resize_handle = render_resize_handle(
+            &self.split_state,
+            if show_connections {
+                CHANGE_CONNECTION_WIDTH
+            } else {
+                px(1.)
+            },
+            if show_connections {
+                colors.editor_background
+            } else {
+                colors.border_variant
+            },
+            window,
+            cx,
+        );
+        let connections = show_connections.then(|| {
+            let rem_size = lhs.rem_size(cx).unwrap_or(window.rem_size());
+            render_change_connections(
+                lhs_editor.clone(),
+                rhs_editor.clone(),
+                self.style.text.line_height_in_pixels(rem_size),
+                self.style.status.clone(),
+            )
+        });
 
         let state_for_drag = self.split_state.downgrade();
         let state_for_drop = self.split_state.downgrade();
@@ -231,8 +262,178 @@ impl RenderOnce for SplitEditorView {
                             .child(rhs),
                     ),
             )
+            .children(connections)
             .child(buffer_headers)
     }
+}
+
+fn render_change_connections(
+    left: Entity<Editor>,
+    right: Entity<Editor>,
+    line_height: Pixels,
+    colors: theme::StatusColors,
+) -> impl IntoElement {
+    canvas(
+        move |bounds, window, cx| {
+            let left_bounds = left.read(cx).last_bounds().copied()?;
+            let right_bounds = right.read(cx).last_bounds().copied()?;
+            let left_snapshot = left.update(cx, |editor, cx| editor.snapshot(window, cx));
+            let right_snapshot = right.update(cx, |editor, cx| editor.snapshot(window, cx));
+            let start_x = left_bounds.right();
+            let end_x = right_bounds.left();
+            if end_x <= start_x {
+                return None;
+            }
+            let gap =
+                Bounds::from_corners(point(start_x, bounds.top()), point(end_x, bounds.bottom()));
+
+            let left_scroll =
+                window.pixel_snap_f64(left_snapshot.scroll_position().y * f64::from(line_height));
+            let right_scroll =
+                window.pixel_snap_f64(right_snapshot.scroll_position().y * f64::from(line_height));
+            let position = |scroll, row: DisplayRow| {
+                bounds.top() + Pixels::from(row.as_f64() * f64::from(line_height) - scroll)
+            };
+            let span = |snapshot: &EditorSnapshot, hunk: &MultiBufferDiffHunk, scroll| {
+                let rows = snapshot.diff_hunk_display_rows(hunk);
+                position(scroll, rows.start)..position(scroll, rows.end)
+            };
+            let left_hunks = left_snapshot
+                .buffer_snapshot()
+                .diff_hunks()
+                .map(|hunk| {
+                    let y = span(&left_snapshot, &hunk, left_scroll);
+                    (hunk.diff_base_byte_range.clone(), (y, hunk))
+                })
+                .collect::<HashMap<_, _>>();
+            let mut ribbons = Vec::new();
+            let mut controls = Vec::new();
+            let fold_spans = |snapshot: &EditorSnapshot, scroll| {
+                snapshot
+                    .blocks_in_range(DisplayRow(0)..DisplayRow(snapshot.max_point().row().0 + 1))
+                    .filter_map(|(row, block)| {
+                        let Block::ExcerptBoundary { .. } = block else {
+                            return None;
+                        };
+                        let top = position(scroll, row) + line_height / 2.;
+                        Some(top..top + px(1.))
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let fold_color = cx.theme().colors().border_variant;
+            for (from, to) in fold_spans(&left_snapshot, left_scroll)
+                .into_iter()
+                .zip(fold_spans(&right_snapshot, right_scroll))
+            {
+                if from.end.max(to.end) >= gap.top()
+                    && from.start.min(to.start) <= gap.bottom()
+                    && let Some(path) = change_connection_path(gap, from, to)
+                {
+                    ribbons.push((path, fold_color.into()));
+                }
+            }
+            for hunk in right_snapshot.buffer_snapshot().diff_hunks() {
+                let to = span(&right_snapshot, &hunk, right_scroll);
+                let matching_left = left_hunks.get(&hunk.diff_base_byte_range);
+                if let Some((from, _)) = matching_left
+                    && from.end.max(to.end) >= gap.top()
+                    && from.start.min(to.start) <= gap.bottom()
+                    && let Some(path) = change_connection_path(gap, from.clone(), to.clone())
+                {
+                    let color = if hunk.status.is_added() {
+                        colors.created_background.into()
+                    } else if hunk.status.is_deleted() {
+                        colors.deleted_background.into()
+                    } else {
+                        linear_gradient(
+                            90.,
+                            linear_color_stop(colors.deleted_background, 0.),
+                            linear_color_stop(colors.created_background, 1.),
+                        )
+                    };
+                    ribbons.push((path, color));
+                }
+
+                let endpoints = matching_left
+                    .map(|(from, hunk)| (&left, hunk, from.start, true))
+                    .into_iter()
+                    .chain([(&right, &hunk, to.start, false)]);
+                window.with_content_mask(Some(ContentMask { bounds: gap }), |window| {
+                    for (editor, hunk, y, left_side) in endpoints {
+                        if y < gap.top() || y + line_height > gap.bottom() {
+                            continue;
+                        }
+                        let renderer = editor.read(cx).diff_hunk_renderer();
+                        let mut element = renderer.render_hunk_controls(
+                            hunk.row_range.start.0,
+                            &hunk.status,
+                            hunk.multi_buffer_range.clone(),
+                            hunk.is_created_file(),
+                            line_height,
+                            editor,
+                            window,
+                            cx,
+                        );
+                        let size =
+                            element.layout_as_root(size(px(24.), line_height).into(), window, cx);
+                        let x = if left_side {
+                            gap.left() + px(2.)
+                        } else {
+                            gap.right() - size.width - px(2.)
+                        };
+                        window.with_absolute_element_offset(point(x, y), |window| {
+                            element.prepaint(window, cx);
+                        });
+                        controls.push(element);
+                    }
+                });
+            }
+            Some((gap, ribbons, controls))
+        },
+        |_, connections, window, cx| {
+            if let Some((bounds, ribbons, controls)) = connections {
+                window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    for (path, color) in ribbons {
+                        window.paint_path(path, color);
+                    }
+                    for mut control in controls {
+                        control.paint(window, cx);
+                    }
+                });
+            }
+        },
+    )
+    .absolute()
+    .inset_0()
+    .size_full()
+}
+
+fn change_connection_path(
+    gap: Bounds<Pixels>,
+    left: Range<Pixels>,
+    right: Range<Pixels>,
+) -> Option<gpui::Path<Pixels>> {
+    if left.is_empty() && right.is_empty() {
+        return None;
+    }
+    let start = gap.left();
+    let end = gap.right();
+    let bend = (end - start) * 0.53;
+    let mut outline = PathBuilder::fill();
+    outline.move_to(point(start, left.start));
+    outline.cubic_bezier_to(
+        point(end, right.start),
+        point(start + bend, left.start),
+        point(end - bend, right.start),
+    );
+    outline.line_to(point(end, right.end));
+    outline.cubic_bezier_to(
+        point(start, left.end),
+        point(end - bend, right.end),
+        point(start + bend, left.end),
+    );
+    outline.close();
+    outline.build().ok()
 }
 
 struct SplitBufferHeadersElement {

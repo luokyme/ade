@@ -120,7 +120,6 @@
       "cmd-alt-o": "project_symbols::Toggle", // JetBrains: Go to Symbol
       "cmd-o": "project_symbols::Toggle", // JetBrains: Go to Class
       "cmd-1": "project_panel::ToggleFocus",
-      "cmd-6": "diagnostics::Deploy",
     },
   },
   {
@@ -130,7 +129,6 @@
       "cmd-2": null, // Bookmarks (left dock)
       "cmd-3": null, // Find Panel (bottom dock)
       "cmd-4": null, // Run Panel (bottom dock)
-      "cmd-6": "diagnostics::Deploy",
       "cmd-8": null, // Services (bottom dock)
       "cmd-9": null, // Git History (bottom dock)
       "cmd-0": "git_panel::ToggleFocus",

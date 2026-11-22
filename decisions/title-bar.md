@@ -1,6 +1,6 @@
 # 标题栏设计决策
 
-本文件适用于标题栏、侧栏入口与编辑区标签栏的设计，编号前缀 `TITLEBAR`。
+本文件适用于标题栏、状态栏、侧栏入口与编辑区标签栏的设计，编号前缀 `TITLEBAR`。
 
 ### TITLEBAR-001 标题栏只保留项目入口与常显菜单栏
 
@@ -31,3 +31,10 @@
 - 理由：用户很少使用菜单栏、调试及大纲，选择参考 Winc 的侧栏切换和编辑区标签样式。
 - 依据：用户 2026-11-22 给出 [Winc](https://github.com/DEEIX-AI/winc) 并明确要求移除菜单栏、调试面板和大纲，参照 Winc 呈现项目、搜索、Git 面板及编辑区标题。
 - 关联：TITLEBAR-002、TITLEBAR-003、GITUI-001、`crates/title_bar/src/title_bar.rs`、`crates/workspace/src/dock.rs`、`crates/workspace/src/pane.rs`。
+
+### TITLEBAR-005 移除独立诊断视图和状态栏诊断入口
+
+- 状态：有效
+- 决策：移除项目诊断汇总页、独立文件诊断页和状态栏诊断入口。诊断信息通过编辑器内的提示与跳转、文件诊断标记呈现。
+- 依据：用户 2026-11-23 明确要求“项目诊断功能可以完全去掉了”。
+- 关联：TITLEBAR-002、`crates/ade/src/ade.rs`。

@@ -310,7 +310,6 @@ fn show_hover(
     }
 
     let hover_popover_delay = EditorSettings::get_global(cx).hover_popover_delay.0;
-    let all_diagnostics_active = editor.all_diagnostics_active();
     let active_group_id = editor.active_diagnostic_group_id();
 
     let renderer = GlobalDiagnosticRenderer::global(cx);
@@ -341,18 +340,11 @@ fn show_hover(
                 delay.await;
             }
             let offset = anchor.to_offset(&snapshot.buffer_snapshot());
-            let local_diagnostic = if all_diagnostics_active {
-                None
-            } else {
-                snapshot
-                    .buffer_snapshot()
-                    .diagnostics_with_buffer_ids_in_range::<MultiBufferOffset>(offset..offset)
-                    .filter(|(_, diagnostic)| {
-                        Some(diagnostic.diagnostic.group_id) != active_group_id
-                    })
-                    // Find the entry with the most specific range
-                    .min_by_key(|(_, entry)| entry.range.end - entry.range.start)
-            };
+            let local_diagnostic = snapshot
+                .buffer_snapshot()
+                .diagnostics_with_buffer_ids_in_range::<MultiBufferOffset>(offset..offset)
+                .filter(|(_, diagnostic)| Some(diagnostic.diagnostic.group_id) != active_group_id)
+                .min_by_key(|(_, entry)| entry.range.end - entry.range.start);
 
             let diagnostic_popover = if let Some((buffer_id, local_diagnostic)) = local_diagnostic {
                 let group = snapshot

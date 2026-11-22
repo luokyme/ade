@@ -23,6 +23,10 @@ struct ResolvedDiffHunks {
 }
 
 pub trait DiffHunkRenderer {
+    fn show_controls_for_inactive_hunks(&self, _cx: &App) -> bool {
+        false
+    }
+
     fn render_hunk_controls(
         &self,
         row: u32,

@@ -43,8 +43,6 @@ pub fn app_menus(cx: &mut App) -> Vec<Menu> {
         MenuItem::action(t!("Terminal Panel"), terminal_panel::Toggle),
         MenuItem::action(t!("Git Panel"), git_panel::ToggleFocus),
         MenuItem::separator(),
-        MenuItem::action(t!("Diagnostics"), diagnostics::Deploy),
-        MenuItem::separator(),
     ];
 
     if ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev) {

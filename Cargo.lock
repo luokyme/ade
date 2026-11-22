@@ -3058,32 +3058,22 @@ dependencies = [
 name = "diagnostics"
 version = "0.1.0"
 dependencies = [
- "ade_actions",
- "anyhow",
- "collections",
  "ctor",
  "editor",
- "futures-lite 1.13.0",
  "gpui",
  "i18n",
  "indoc",
- "itertools 0.14.0",
  "language",
- "log",
  "lsp",
  "markdown",
  "pretty_assertions",
  "project",
- "rand 0.9.4",
- "serde_json",
  "settings",
  "text",
  "theme",
  "theme_settings",
  "ui",
- "unindent",
  "util",
- "workspace",
  "zlog",
 ]
 

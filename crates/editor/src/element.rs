@@ -354,6 +354,7 @@ pub struct EditorElement {
     editor: Entity<Editor>,
     style: EditorStyle,
     split_side: Option<SplitSide>,
+    change_connections: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,11 +371,16 @@ impl EditorElement {
             editor: editor.clone(),
             style,
             split_side: None,
+            change_connections: false,
         }
     }
 
     pub fn set_split_side(&mut self, side: SplitSide) {
         self.split_side = Some(side);
+    }
+
+    pub(super) fn use_change_connections(&mut self) {
+        self.change_connections = true;
     }
 
     fn register_actions(&self, window: &mut Window, cx: &mut App) {
@@ -4645,6 +4651,7 @@ impl EditorElement {
         cx: &mut App,
     ) -> (Vec<AnyElement>, Vec<(DisplayRow, Bounds<Pixels>)>) {
         let diff_hunk_renderer = editor.read(cx).diff_hunk_renderer();
+        let show_inactive_controls = diff_hunk_renderer.show_controls_for_inactive_hunks(cx);
         let hovered_diff_hunk_row = editor.read(cx).hovered_diff_hunk_row;
         let sticky_top = text_hitbox.bounds.top() + sticky_header_height;
 
@@ -4695,9 +4702,10 @@ impl EditorElement {
                     continue;
                 }
 
-                if active_rows
-                    .iter()
-                    .any(|row| row.is_some_and(|row| display_row_range.contains(&row)))
+                if show_inactive_controls
+                    || active_rows
+                        .iter()
+                        .any(|row| row.is_some_and(|row| display_row_range.contains(&row)))
                 {
                     let hunk_start_y: Pixels = (display_row_range.start.as_f64()
                         * ScrollPixelOffset::from(line_height)
@@ -4927,7 +4935,7 @@ impl EditorElement {
                         let highlight_h_range =
                             match layout.position_map.snapshot.current_line_highlight {
                                 CurrentLineHighlight::Gutter => Some(Range {
-                                    start: layout.hitbox.left(),
+                                    start: layout.gutter_hitbox.left(),
                                     end: layout.gutter_hitbox.right(),
                                 }),
                                 CurrentLineHighlight::Line => Some(Range {
@@ -4971,8 +4979,8 @@ impl EditorElement {
                     let mut origin_x = layout.hitbox.left();
                     let mut width = layout.hitbox.size.width;
                     if !highlight.include_gutter {
-                        origin_x += layout.gutter_hitbox.size.width;
-                        width -= layout.gutter_hitbox.size.width;
+                        origin_x = layout.position_map.text_hitbox.bounds.left();
+                        width = layout.position_map.text_hitbox.bounds.size.width;
                     }
 
                     let origin = point(
@@ -8173,7 +8181,7 @@ impl EditorElement {
     /// Returns the rem size to use when rendering the [`EditorElement`].
     ///
     /// This allows UI elements to scale based on the `buffer_font_size`.
-    fn rem_size(&self, cx: &mut App) -> Option<Pixels> {
+    pub(super) fn rem_size(&self, cx: &mut App) -> Option<Pixels> {
         match self.editor.read(cx).mode {
             EditorMode::Full {
                 scale_ui_elements_with_buffer_font_size: true,
@@ -8458,13 +8466,22 @@ impl Element for EditorElement {
                     });
 
                     let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                    let mut gutter_bounds = gutter_bounds(bounds, gutter_dimensions);
+                    let text_origin = if self.change_connections
+                        && self.split_side == Some(SplitSide::Left)
+                    {
+                        gutter_bounds.origin.x += text_width;
+                        bounds.origin
+                    } else {
+                        gutter_bounds.top_right()
+                    };
                     let gutter_hitbox = window.insert_hitbox(
-                        gutter_bounds(bounds, gutter_dimensions),
+                        gutter_bounds,
                         HitboxBehavior::Normal,
                     );
                     let text_hitbox = window.insert_hitbox(
                         Bounds {
-                            origin: gutter_hitbox.top_right(),
+                            origin: text_origin,
                             size: size(text_width, bounds.size.height),
                         },
                         HitboxBehavior::Normal,
@@ -9674,7 +9691,9 @@ impl Element for EditorElement {
                     };
 
                     let (diff_hunk_controls, diff_hunk_control_bounds) =
-                        if is_read_only && self.editor.read(cx).diff_hunk_renderer.is_none() {
+                        if self.change_connections
+                            || (is_read_only && self.editor.read(cx).diff_hunk_renderer.is_none())
+                        {
                             (vec![], vec![])
                         } else {
                             self.layout_diff_hunk_controls(

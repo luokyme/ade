@@ -14,9 +14,7 @@ use settings::Settings;
 use text::Point;
 use theme_settings::ThemeSettings;
 use ui::{CopyButton, prelude::*};
-use util::maybe;
-
-use crate::toolbar_controls::DiagnosticsToolbarEditor;
+use util::{ResultExt, maybe};
 
 pub struct DiagnosticRenderer;
 
@@ -24,7 +22,6 @@ impl DiagnosticRenderer {
     pub fn diagnostic_blocks_for_group(
         diagnostic_group: Vec<DiagnosticEntryRef<'_, Point>>,
         buffer_id: BufferId,
-        diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
         language_registry: Option<Arc<LanguageRegistry>>,
         cx: &mut App,
     ) -> Vec<DiagnosticBlock> {
@@ -56,7 +53,6 @@ impl DiagnosticRenderer {
                 results.push(DiagnosticBlock {
                     initial_range: primary.range.clone(),
                     severity: primary.diagnostic.severity,
-                    diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: primary.diagnostic.message.as_shared_string().clone(),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
@@ -72,7 +68,6 @@ impl DiagnosticRenderer {
                 results.push(DiagnosticBlock {
                     initial_range: entry.range.clone(),
                     severity: entry.diagnostic.severity,
-                    diagnostics_editor: diagnostics_editor.clone(),
                     copy_message: entry.diagnostic.message.as_shared_string().clone(),
                     markdown: cx.new(|cx| {
                         Markdown::new(markdown.into(), language_registry.clone(), None, cx)
@@ -139,13 +134,8 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
         language_registry: Option<Arc<LanguageRegistry>>,
         cx: &mut App,
     ) -> Vec<BlockProperties<Anchor>> {
-        let blocks = Self::diagnostic_blocks_for_group(
-            diagnostic_group,
-            buffer_id,
-            None,
-            language_registry,
-            cx,
-        );
+        let blocks =
+            Self::diagnostic_blocks_for_group(diagnostic_group, buffer_id, language_registry, cx);
 
         blocks
             .into_iter()
@@ -174,13 +164,8 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
         language_registry: Option<Arc<LanguageRegistry>>,
         cx: &mut App,
     ) -> Option<Entity<Markdown>> {
-        let blocks = Self::diagnostic_blocks_for_group(
-            diagnostic_group,
-            buffer_id,
-            None,
-            language_registry,
-            cx,
-        );
+        let blocks =
+            Self::diagnostic_blocks_for_group(diagnostic_group, buffer_id, language_registry, cx);
         blocks
             .into_iter()
             .find_map(|block| (block.initial_range == range).then(|| block.markdown))
@@ -193,16 +178,14 @@ impl editor::DiagnosticRenderer for DiagnosticRenderer {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) {
-        DiagnosticBlock::open_link(editor, &None, link, window, cx);
+        DiagnosticBlock::open_link(editor, link, window, cx);
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct DiagnosticBlock {
     pub(crate) initial_range: Range<Point>,
     pub(crate) severity: DiagnosticSeverity,
     pub(crate) markdown: Entity<Markdown>,
-    pub(crate) diagnostics_editor: Option<Arc<dyn DiagnosticsToolbarEditor>>,
     pub(crate) copy_message: SharedString,
 }
 
@@ -225,7 +208,6 @@ impl DiagnosticBlock {
         let settings = ThemeSettings::get_global(cx);
         let editor_line_height = (settings.line_height() * settings.buffer_font_size(cx)).round();
         let line_height = editor_line_height;
-        let diagnostics_editor = self.diagnostics_editor.clone();
 
         let copy_button_id = format!(
             "copy-diagnostic-{}-{}-{}-{}",
@@ -259,10 +241,8 @@ impl DiagnosticBlock {
                     .on_url_click({
                         move |link, window, cx| {
                             editor
-                                .update(cx, |editor, cx| {
-                                    Self::open_link(editor, &diagnostics_editor, link, window, cx)
-                                })
-                                .ok();
+                                .update(cx, |editor, cx| Self::open_link(editor, link, window, cx))
+                                .log_err();
                         }
                     }),
                 ),
@@ -276,7 +256,6 @@ impl DiagnosticBlock {
 
     pub fn open_link(
         editor: &mut Editor,
-        diagnostics_editor: &Option<Arc<dyn DiagnosticsToolbarEditor>>,
         link: SharedString,
         window: &mut Window,
         cx: &mut Context<Editor>,
@@ -296,30 +275,14 @@ impl DiagnosticBlock {
             return;
         };
 
-        if let Some(diagnostics_editor) = diagnostics_editor {
-            if let Some(diagnostic) = diagnostics_editor
-                .get_diagnostics_for_buffer(buffer_id, cx)
-                .into_iter()
-                .filter(|d| d.diagnostic.group_id == group_id)
-                .nth(ix)
-            {
-                let multibuffer = editor.buffer().read(cx);
-                if let Some(anchor_range) = multibuffer
-                    .snapshot(cx)
-                    .buffer_anchor_range_to_anchor_range(diagnostic.range)
-                {
-                    Self::jump_to(editor, anchor_range, window, cx);
-                    return;
-                }
-            }
-        } else if let Some(diagnostic) = editor
+        if let Some(diagnostic) = editor
             .snapshot(window, cx)
             .buffer_snapshot()
             .diagnostic_group(buffer_id, group_id)
             .nth(ix)
         {
-            Self::jump_to(editor, diagnostic.range, window, cx)
-        };
+            Self::jump_to(editor, diagnostic.range, window, cx);
+        }
     }
 
     fn jump_to<I: ToOffset>(

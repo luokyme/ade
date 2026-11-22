@@ -6,11 +6,12 @@ use crate::editor_settings::ScrollBeyondLastLine;
 use crate::{
     Anchor, DisplayPoint, DisplayRow, Editor, EditorEvent, EditorMode, EditorSettings,
     MultiBufferSnapshot, RowExt, SelectionEffects, SizingBehavior, ToPoint,
-    display_map::{DisplaySnapshot, ToDisplayPoint},
+    display_map::{Block, DisplaySnapshot, ToDisplayPoint},
     hover_popover::hide_hover,
     persistence::EditorDb,
 };
 pub use autoscroll::{Autoscroll, AutoscrollStrategy};
+use collections::HashMap;
 use core::fmt::Debug;
 use gpui::{
     Along, App, AppContext as _, Axis, Context, Entity, EntityId, OngoingScroll, Pixels, Task,
@@ -31,6 +32,137 @@ pub struct WasScrolled(pub(crate) bool);
 
 pub type ScrollOffset = f64;
 pub type ScrollPixelOffset = f64;
+
+pub(crate) struct DiffScrollMap {
+    stops: Vec<(f64, [f64; 2])>,
+    row_counts: [f64; 2],
+}
+
+impl DiffScrollMap {
+    pub(crate) fn new([left, right]: [&DisplaySnapshot; 2]) -> Self {
+        let left_hunks: HashMap<_, _> = left
+            .buffer_snapshot()
+            .diff_hunks()
+            .map(|hunk| {
+                (
+                    hunk.diff_base_byte_range.clone(),
+                    left.diff_hunk_display_rows(&hunk),
+                )
+            })
+            .collect();
+        let mut rows = Vec::new();
+        for hunk in right.buffer_snapshot().diff_hunks() {
+            if let Some(left_rows) = left_hunks.get(&hunk.diff_base_byte_range) {
+                let right_rows = right.diff_hunk_display_rows(&hunk);
+                rows.push([left_rows.start.as_f64(), right_rows.start.as_f64()]);
+                rows.push([left_rows.end.as_f64(), right_rows.end.as_f64()]);
+            }
+        }
+        let folds = |snapshot: &DisplaySnapshot| {
+            snapshot
+                .blocks_in_range(DisplayRow(0)..snapshot.max_point().row().next_row())
+                .filter_map(|(row, block)| {
+                    matches!(block, Block::ExcerptBoundary { .. }).then_some(row.as_f64() + 0.5)
+                })
+                .collect::<Vec<_>>()
+        };
+        rows.extend(
+            folds(left)
+                .into_iter()
+                .zip(folds(right))
+                .map(|(left, right)| [left, right]),
+        );
+        let row_counts =
+            [left, right].map(|snapshot| snapshot.max_point().row().next_row().as_f64());
+        Self::from_rows(rows, row_counts)
+    }
+
+    fn from_rows(mut rows: Vec<[f64; 2]>, row_counts: [f64; 2]) -> Self {
+        rows.sort_by(|left, right| {
+            left[0]
+                .total_cmp(&right[0])
+                .then(left[1].total_cmp(&right[1]))
+        });
+        let mut stops = vec![(0., [0., 0.])];
+        let mut previous = [0., 0.];
+        let mut position = 0.;
+        for pair in rows.into_iter().chain([row_counts]) {
+            if pair == previous
+                || (0..2).any(|side| pair[side] < previous[side] || pair[side] > row_counts[side])
+            {
+                continue;
+            }
+            // A deletion still needs a scroll range when it occupies no rows in the working file.
+            position += (pair[0] - previous[0]).max(pair[1] - previous[1]);
+            stops.push((position, pair));
+            previous = pair;
+        }
+        Self { stops, row_counts }
+    }
+
+    fn row_at(&self, side: usize, position: f64) -> f64 {
+        let index = self.stops.partition_point(|(stop, _)| *stop < position);
+        let Some((start, from)) = index.checked_sub(1).and_then(|index| self.stops.get(index))
+        else {
+            return 0.;
+        };
+        let Some((end, to)) = self.stops.get(index) else {
+            return from[side];
+        };
+        from[side] + (to[side] - from[side]) * (position - start) / (end - start)
+    }
+
+    fn position_at(&self, side: usize, row: f64) -> f64 {
+        let index = self.stops.partition_point(|(_, pair)| pair[side] < row);
+        let Some((start, from)) = index.checked_sub(1).and_then(|index| self.stops.get(index))
+        else {
+            return 0.;
+        };
+        let Some((end, to)) = self.stops.get(index) else {
+            return *start;
+        };
+        start + (end - start) * (row - from[side]) / (to[side] - from[side])
+    }
+
+    fn top_row(&self, side: usize, position: f64, half_viewport: f64) -> f64 {
+        let focus = position + position.min(half_viewport);
+        let row = self.row_at(side, focus);
+        row - (row / 2.).min(half_viewport)
+    }
+
+    fn position_at_top(&self, side: usize, top: f64, half_viewport: f64) -> f64 {
+        let focus = self.position_at(side, top + top.min(half_viewport));
+        focus - (focus / 2.).min(half_viewport)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConnectedScrollPosition {
+    position: f64,
+    visible_rows: f64,
+    past_end_margin: Option<f64>,
+}
+
+impl ConnectedScrollPosition {
+    fn max_top(self, map: &DiffScrollMap, side: usize) -> f64 {
+        match self.past_end_margin {
+            Some(margin) => (map.row_counts[side] - self.visible_rows + margin).max(0.),
+            None => (map.row_counts[side] - 1.).max(0.),
+        }
+    }
+
+    fn top(self, map: &DiffScrollMap, side: usize) -> f64 {
+        map.top_row(side, self.position, self.visible_rows / 2.)
+            .min(self.max_top(map, side))
+    }
+
+    fn max_position(self, map: &DiffScrollMap) -> f64 {
+        (0..2)
+            .map(|side| map.position_at_top(side, self.max_top(map, side), self.visible_rows / 2.))
+            .fold(0., f64::max)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollAnchor {
     pub offset: gpui::Point<ScrollOffset>,
@@ -70,10 +202,37 @@ impl ScrollAnchor {
 pub struct SharedScrollAnchor {
     pub scroll_anchor: ScrollAnchor,
     pub display_map_id: Option<EntityId>,
+    pub(crate) connected_scroll: Option<ConnectedScrollPosition>,
 }
 
 impl SharedScrollAnchor {
+    fn connected_scroll_for(
+        &self,
+        snapshot: &DisplaySnapshot,
+        map: &DiffScrollMap,
+        side: usize,
+    ) -> Option<ConnectedScrollPosition> {
+        let mut scroll = self.connected_scroll?;
+        let (source, source_side) = if self.display_map_id == Some(snapshot.display_map_id) {
+            (snapshot, side)
+        } else {
+            (snapshot.companion_snapshot()?, 1 - side)
+        };
+        let anchored_top = self.scroll_anchor.scroll_position(source).y;
+        if (scroll.top(map, source_side) - anchored_top).abs() > 0.001 {
+            scroll.position =
+                map.position_at_top(source_side, anchored_top, scroll.visible_rows / 2.);
+        }
+        Some(scroll)
+    }
+
     pub fn scroll_position(&self, snapshot: &DisplaySnapshot) -> gpui::Point<ScrollOffset> {
+        if self.connected_scroll.is_some()
+            && let Some((map, side)) = snapshot.diff_scroll_map()
+            && let Some(connected) = self.connected_scroll_for(snapshot, map, side)
+        {
+            return point(self.scroll_anchor.offset.x, connected.top(map, side));
+        }
         let snapshot = if let Some(display_map_id) = self.display_map_id
             && display_map_id != snapshot.display_map_id
         {
@@ -93,6 +252,9 @@ impl SharedScrollAnchor {
     }
 
     pub fn scroll_top_display_point(&self, snapshot: &DisplaySnapshot) -> DisplayPoint {
+        if self.connected_scroll.is_some() && snapshot.diff_scroll_map().is_some() {
+            return DisplayPoint::new(DisplayRow(self.scroll_position(snapshot).y as u32), 0);
+        }
         let snapshot = if let Some(display_map_id) = self.display_map_id
             && display_map_id != snapshot.display_map_id
         {
@@ -171,6 +333,7 @@ impl ScrollManager {
         let anchor = cx.new(|_| SharedScrollAnchor {
             scroll_anchor: ScrollAnchor::new(),
             display_map_id: None,
+            connected_scroll: None,
         });
         ScrollManager {
             vertical_scroll_margin: EditorSettings::get_global(cx).vertical_scroll_margin,
@@ -213,6 +376,7 @@ impl ScrollManager {
         self.anchor.update(cx, |this, _| {
             this.scroll_anchor = native_anchor;
             this.display_map_id = Some(my_snapshot.display_map_id);
+            this.connected_scroll = None;
         });
         self.ongoing = other.ongoing;
     }
@@ -234,7 +398,25 @@ impl ScrollManager {
     pub fn native_anchor(&self, snapshot: &DisplaySnapshot, cx: &App) -> ScrollAnchor {
         let shared = self.anchor.read(cx);
 
-        let mut result = if let Some(display_map_id) = shared.display_map_id
+        let mut result = if shared.connected_scroll.is_some()
+            && snapshot.diff_scroll_map().is_some()
+        {
+            let position = shared.scroll_position(snapshot);
+            let display_point = snapshot.clip_point(
+                DisplayPoint::new(DisplayRow(position.y as u32), 0),
+                Bias::Left,
+            );
+            let anchor = snapshot
+                .buffer_snapshot()
+                .anchor_before(display_point.to_point(snapshot));
+            ScrollAnchor {
+                anchor,
+                offset: point(
+                    position.x,
+                    position.y - anchor.to_display_point(snapshot).row().as_f64(),
+                ),
+            }
+        } else if let Some(display_map_id) = shared.display_map_id
             && display_map_id != snapshot.display_map_id
         {
             let companion_snapshot = snapshot
@@ -291,6 +473,7 @@ impl ScrollManager {
         self.anchor = cx.new(|_| SharedScrollAnchor {
             scroll_anchor,
             display_map_id: Some(snapshot.display_map_id),
+            connected_scroll: None,
         });
     }
 
@@ -317,6 +500,7 @@ impl ScrollManager {
     fn set_scroll_position(
         &mut self,
         scroll_position: gpui::Point<ScrollOffset>,
+        relative_rows: Option<f64>,
         map: &DisplaySnapshot,
         scroll_beyond_last_line: ScrollBeyondLastLine,
         local: bool,
@@ -325,25 +509,62 @@ impl ScrollManager {
         window: &mut Window,
         cx: &mut Context<Editor>,
     ) -> WasScrolled {
-        let scroll_top = scroll_position.y.max(0.);
-        let scroll_top = match scroll_beyond_last_line {
-            ScrollBeyondLastLine::OnePage => scroll_top,
-            ScrollBeyondLastLine::Off => {
-                if let Some(height_in_lines) = self.visible_line_count {
-                    let max_row = map.max_point().row().as_f64();
-                    scroll_top.min(max_row - height_in_lines + 1.).max(0.)
-                } else {
-                    scroll_top
+        let connected_scroll = map.diff_scroll_map().map(|(scroll_map, side)| {
+            let current = self.anchor.read(cx);
+            let visible_rows = self.visible_line_count.unwrap_or_default();
+            let half_viewport = visible_rows / 2.;
+            let past_end_margin = match scroll_beyond_last_line {
+                ScrollBeyondLastLine::OnePage => None,
+                ScrollBeyondLastLine::Off => Some(0.),
+                ScrollBeyondLastLine::VerticalScrollMargin => Some(self.vertical_scroll_margin),
+            };
+            let current_top = current.scroll_position(map).y;
+            let current_position = current
+                .connected_scroll_for(map, scroll_map, side)
+                .map_or_else(
+                    || scroll_map.position_at_top(side, current_top, half_viewport),
+                    |scroll| scroll.position,
+                );
+            let position = if let Some(delta) = relative_rows {
+                current_position + delta
+            } else if scroll_position.y == current_top {
+                current_position
+            } else {
+                scroll_map.position_at_top(side, scroll_position.y.max(0.), half_viewport)
+            };
+            let mut scroll = ConnectedScrollPosition {
+                position,
+                visible_rows,
+                past_end_margin,
+            };
+            scroll.position = scroll.position.clamp(0., scroll.max_position(scroll_map));
+            scroll
+        });
+        let scroll_top = if let Some((scroll_map, side)) = map.diff_scroll_map()
+            && let Some(scroll) = connected_scroll
+        {
+            scroll.top(scroll_map, side)
+        } else {
+            let scroll_top = scroll_position.y.max(0.);
+            match scroll_beyond_last_line {
+                ScrollBeyondLastLine::OnePage => scroll_top,
+                ScrollBeyondLastLine::Off => {
+                    if let Some(height_in_lines) = self.visible_line_count {
+                        let max_row = map.max_point().row().as_f64();
+                        scroll_top.min(max_row - height_in_lines + 1.).max(0.)
+                    } else {
+                        scroll_top
+                    }
                 }
-            }
-            ScrollBeyondLastLine::VerticalScrollMargin => {
-                if let Some(height_in_lines) = self.visible_line_count {
-                    let max_row = map.max_point().row().as_f64();
-                    scroll_top
-                        .min(max_row - height_in_lines + 1. + self.vertical_scroll_margin)
-                        .max(0.)
-                } else {
-                    scroll_top
+                ScrollBeyondLastLine::VerticalScrollMargin => {
+                    if let Some(height_in_lines) = self.visible_line_count {
+                        let max_row = map.max_point().row().as_f64();
+                        scroll_top
+                            .min(max_row - height_in_lines + 1. + self.vertical_scroll_margin)
+                            .max(0.)
+                    } else {
+                        scroll_top
+                    }
                 }
             }
         };
@@ -365,6 +586,7 @@ impl ScrollManager {
                 ),
             },
             map,
+            connected_scroll,
             scroll_top_buffer_point.row,
             local,
             autoscroll,
@@ -378,6 +600,7 @@ impl ScrollManager {
         &mut self,
         anchor: ScrollAnchor,
         display_map: &DisplaySnapshot,
+        connected_scroll: Option<ConnectedScrollPosition>,
         top_row: u32,
         local: bool,
         autoscroll: bool,
@@ -399,13 +622,15 @@ impl ScrollManager {
         self.autoscroll_request.take();
 
         let current = self.anchor.read(cx);
-        if current.scroll_anchor == adjusted_anchor {
+        if current.scroll_anchor == adjusted_anchor && current.connected_scroll == connected_scroll
+        {
             return WasScrolled(false);
         }
 
         self.anchor.update(cx, |shared, _| {
             shared.scroll_anchor = adjusted_anchor;
             shared.display_map_id = Some(display_map.display_map_id);
+            shared.connected_scroll = connected_scroll;
         });
         cx.emit(EditorEvent::ScrollPositionChanged { local, autoscroll });
         self.show_scrollbars(window, cx);
@@ -633,6 +858,18 @@ impl Editor {
     ) {
         let opened_first_time = self.scroll_manager.visible_line_count.is_none();
         self.scroll_manager.visible_line_count = Some(lines);
+        let anchor = &self.scroll_manager.anchor;
+        if anchor
+            .read(cx)
+            .connected_scroll
+            .is_some_and(|scroll| scroll.visible_rows != lines)
+        {
+            anchor.update(cx, |shared, _| {
+                if let Some(scroll) = &mut shared.connected_scroll {
+                    scroll.visible_rows = lines;
+                }
+            });
+        }
         if opened_first_time {
             self.update_data_on_scroll(false, window, cx);
         }
@@ -654,7 +891,15 @@ impl Editor {
         }
         let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
         let position = self.scroll_manager.scroll_position(&display_map, cx) + delta.map(f64::from);
-        self.set_scroll_position_taking_display_map(position, true, false, display_map, window, cx);
+        self.set_scroll_position_taking_display_map(
+            position,
+            Some(f64::from(delta.y)),
+            true,
+            false,
+            display_map,
+            window,
+            cx,
+        );
     }
 
     pub fn set_scroll_position(
@@ -704,6 +949,7 @@ impl Editor {
         let map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
         let was_scrolled = self.set_scroll_position_taking_display_map(
             scroll_position,
+            None,
             local,
             autoscroll,
             map,
@@ -717,6 +963,7 @@ impl Editor {
     fn set_scroll_position_taking_display_map(
         &mut self,
         scroll_position: gpui::Point<ScrollOffset>,
+        relative_rows: Option<f64>,
         local: bool,
         autoscroll: bool,
         display_map: DisplaySnapshot,
@@ -735,6 +982,7 @@ impl Editor {
         let scroll_beyond_last_line = self.scroll_beyond_last_line(cx);
         self.scroll_manager.set_scroll_position(
             adjusted_position,
+            relative_rows,
             &display_map,
             scroll_beyond_last_line,
             local,
@@ -759,6 +1007,18 @@ impl Editor {
         hide_hover(self, cx);
         let workspace_id = self.workspace.as_ref().and_then(|workspace| workspace.1);
         let display_map = self.display_map.update(cx, |map, cx| map.snapshot(cx));
+        if display_map.diff_scroll_map().is_some() {
+            self.set_scroll_position_taking_display_map(
+                scroll_anchor.scroll_position(&display_map),
+                None,
+                true,
+                false,
+                display_map,
+                window,
+                cx,
+            );
+            return;
+        }
         let top_row = scroll_anchor
             .anchor
             .to_point(&self.buffer().read(cx).snapshot(cx))
@@ -766,6 +1026,7 @@ impl Editor {
         self.scroll_manager.set_anchor(
             scroll_anchor,
             &display_map,
+            None,
             top_row,
             true,
             false,

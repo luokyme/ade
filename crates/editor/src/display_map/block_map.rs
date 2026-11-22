@@ -5404,7 +5404,7 @@ mod tests {
 
         let rhs_entity_id = rhs_multibuffer.entity_id();
 
-        let companion = cx.new(|_| Companion::new(rhs_entity_id));
+        let companion = cx.new(|_| Companion::new(rhs_entity_id, true));
 
         let rhs_edits = Patch::new(vec![text::Edit {
             old: WrapRow(0)..rhs_wrap_snapshot.max_point().row(),

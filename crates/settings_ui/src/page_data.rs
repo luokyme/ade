@@ -2744,7 +2744,7 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
         ]
     }
 
-    fn diagnostics_section() -> [SettingsPageItem; 3] {
+    fn diagnostics_section() -> [SettingsPageItem; 2] {
         [
             SettingsPageItem::SectionHeader(n!("Diagnostics")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -2759,28 +2759,6 @@ fn languages_and_tools_page(cx: &App) -> SettingsPage {
                     },
                     write: |settings_content, value, _| {
                         settings_content.editor.diagnostics_max_severity = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Include Warnings"),
-                description: n!("Whether to show warnings or not by default."),
-                field: Box::new(SettingField {
-                    json_path: Some("diagnostics.include_warnings"),
-                    pick: |settings_content| {
-                        settings_content
-                            .diagnostics
-                            .as_ref()?
-                            .include_warnings
-                            .as_ref()
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .diagnostics
-                            .get_or_insert_default()
-                            .include_warnings = value;
                     },
                 }),
                 metadata: None,
@@ -3469,7 +3447,7 @@ fn window_and_layout_page() -> SettingsPage {
         ]
     }
 
-    fn status_bar_section() -> [SettingsPageItem; 11] {
+    fn status_bar_section() -> [SettingsPageItem; 10] {
         [
             SettingsPageItem::SectionHeader(n!("Status Bar")),
             SettingsPageItem::SettingItem(SettingItem {
@@ -3603,19 +3581,6 @@ fn window_and_layout_page() -> SettingsPage {
                     pick: |settings_content| settings_content.terminal.as_ref()?.button.as_ref(),
                     write: |settings_content, value, _| {
                         settings_content.terminal.get_or_insert_default().button = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: n!("Diagnostics Button"),
-                description: n!("Show the project diagnostics button in the status bar."),
-                field: Box::new(SettingField {
-                    json_path: Some("diagnostics.button"),
-                    pick: |settings_content| settings_content.diagnostics.as_ref()?.button.as_ref(),
-                    write: |settings_content, value, _| {
-                        settings_content.diagnostics.get_or_insert_default().button = value;
                     },
                 }),
                 metadata: None,
