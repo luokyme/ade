@@ -132,15 +132,20 @@ linux() {
     # Setup ~/.local directories
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
 
-    # Link the binary
-    ln -sf "$HOME/.local/ade.app/bin/ade" "$HOME/.local/bin/ade"
+    # A user launcher outside the replaced bundle can preserve local settings across installs.
+    ade_cli="$HOME/.local/ade.app/bin/ade"
+    user_launcher="$HOME/.local/libexec/ade-launcher"
+    if [ -f "$user_launcher" ] && [ -x "$user_launcher" ]; then
+        ade_cli="$user_launcher"
+    fi
+    ln -sf "$ade_cli" "$HOME/.local/bin/ade"
 
     # Copy .desktop file
     desktop_file_path="$HOME/.local/share/applications/${appid}.desktop"
     cp "$temp/Ade.desktop" "${desktop_file_path}"
     sed -i "s/^Name=Ade Dev$/Name=Ade/" "${desktop_file_path}"
     sed -i "s|Icon=ade|Icon=$HOME/.local/ade.app/share/icons/hicolor/512x512/apps/ade.png|g" "${desktop_file_path}"
-    sed -i "s|Exec=ade|Exec=$HOME/.local/ade.app/bin/ade|g" "${desktop_file_path}"
+    sed -i "s|Exec=ade|Exec=$ade_cli|g" "${desktop_file_path}"
     rm -f "$HOME/.local/share/applications/me.farshed.Ade-Dev.desktop"
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$HOME/.local/share/applications"
