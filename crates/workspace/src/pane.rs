@@ -2920,8 +2920,8 @@ impl Pane {
                 selected: is_active,
                 preview: is_preview,
                 deemphasized: !self.has_focus(window, cx),
-                max_title_len: None,
-                truncate_title_middle: false,
+                max_title_len: Some(40),
+                truncate_title_middle: true,
             },
             window,
             cx,
@@ -3113,7 +3113,7 @@ impl Pane {
                     .id(("pane-tab-content", ix))
                     .flex_1()
                     .min_w_0()
-                    .gap(px(3.))
+                    .gap(px(6.))
                     .children(if let Some(icon) = icon {
                         Some(tab_icon_slot(icon, is_active).into_any_element())
                     } else if !capability.editable() {

@@ -2339,10 +2339,10 @@ impl Workspace {
         }
     }
 
-    pub fn finish_dock_restoration(&self, cx: &mut App) {
+    pub fn finish_dock_restoration(&self, window: &mut Window, cx: &mut App) {
         for dock in [&self.left_dock, &self.bottom_dock, &self.right_dock] {
-            dock.update(cx, |dock, _| {
-                dock.finish_restoration();
+            dock.update(cx, |dock, cx| {
+                dock.finish_restoration(window, cx);
             });
         }
     }
@@ -18203,8 +18203,8 @@ mod tests {
             });
         });
 
-        workspace.update(cx, |workspace, cx| {
-            workspace.finish_dock_restoration(cx);
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.finish_dock_restoration(window, cx);
         });
 
         workspace.update_in(cx, |workspace, window, cx| {
@@ -18237,8 +18237,8 @@ mod tests {
         let (workspace, cx) =
             cx.add_window_view(|window, cx| Workspace::test_new(project, window, cx));
 
-        workspace.update(cx, |workspace, cx| {
-            workspace.finish_dock_restoration(cx);
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.finish_dock_restoration(window, cx);
         });
 
         workspace.update_in(cx, |workspace, window, cx| {

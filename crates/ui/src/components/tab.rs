@@ -3,7 +3,7 @@ use smallvec::SmallVec;
 
 use crate::prelude::*;
 
-const TAB_HEIGHT: Pixels = px(24.);
+const TAB_HEIGHT: Pixels = px(26.);
 const TAB_SLOT_SIZE: Pixels = px(18.);
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -91,16 +91,8 @@ impl RenderOnce for Tab {
         } else {
             colors.text_muted
         };
-        let selected_background = colors.tab_active_background;
-        let hover_background = selected_background.opacity(0.6);
-
         let has_end_slot = self.end_slot.is_some();
-        let slot_layer = || {
-            h_flex()
-                .absolute()
-                .inset_0()
-                .justify_center()
-        };
+        let slot_layer = || h_flex().absolute().inset_0().justify_center();
         let slot = h_flex()
             .relative()
             .flex_none()
@@ -130,16 +122,17 @@ impl RenderOnce for Tab {
             .flex_none()
             .items_center()
             .h(TAB_HEIGHT)
-            .px(px(4.))
-            .gap(px(3.))
-            .rounded(px(6.))
+            .pl(px(10.))
+            .pr(px(6.))
+            .gap(px(5.))
+            .rounded_full()
             .text_color(text_color)
             .cursor_pointer()
             .map(|this| {
                 if self.selected {
-                    this.bg(selected_background)
+                    this.bg(colors.element_selected)
                 } else {
-                    this.hover(|style| style.bg(hover_background))
+                    this.hover(|style| style.bg(colors.element_hover))
                 }
             })
             .map(|this| match self.close_side {

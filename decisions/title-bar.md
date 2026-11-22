@@ -1,29 +1,33 @@
 # 标题栏设计决策
 
-本文件适用于标题栏（title bar）的信息架构与常显行为，编号前缀 `TITLEBAR`。
+本文件适用于标题栏、侧栏入口与编辑区标签栏的设计，编号前缀 `TITLEBAR`。
 
 ### TITLEBAR-001 标题栏只保留项目入口与常显菜单栏
 
-- 状态：有效
-- 决策：标题栏不显示当前工作树名称与 Git 分支名称，也不显示分支状态图标；标题栏保留"最近的项目"入口（项目名按钮及其最近项目弹层），该入口默认常显，不因菜单栏展开而隐藏；应用内菜单栏在无原生菜单栏的平台上常驻展开，不再提供折叠为单个菜单图标的形态。
-- 理由：工作树与分支信息在 Git 面板内已可获取，标题栏同时展示会造成信息重复与顶部噪音；菜单栏常显使应用的主菜单随时可见，也避免菜单展开时挤占项目入口的位置。
-- 否决：保留 `show_branch_name` / `show_worktree_name` / `show_branch_status_icon` / `show_menus` 四个标题栏设置项——用户要求移除工作树与分支显示能力并让菜单栏常显，保留开关会给出无效或名义上的配置项。
+- 状态：已取代（→ TITLEBAR-004）
+- 变更原因：用户明确要求移除应用内菜单栏，改用 Winc 的面板布局。
 - 依据：用户 2026-11-13 明确要求"移除顶部显示工作树和分支的功能，保留'最近的项目'，同时让菜单栏常显"。
-- 关联：`crates/title_bar/src/title_bar.rs`、`crates/title_bar/src/application_menu.rs`、`crates/settings_content/src/title_bar.rs`（`title_bar` 设置仅剩 `show_project_items`、`show_onboarding_banner`、`button_layout`）。
-- 澄清：“最近的项目”入口（项目名按钮及其最近项目弹层）保持在标题栏中部居中，位置不再改动（用户 2026-11-13 要求“最近的项目位置不要改”，并确认居中为正确状态）。
 
 ### TITLEBAR-002 状态栏默认显示在标题栏右侧，位置可配置
 
 - 状态：有效
-- 决策：状态栏默认显示在标题栏右侧，用户可通过配置切换回窗口底部；TITLEBAR-001 的菜单栏常显、最近项目入口及工作树与分支显示约束继续有效。
+- 决策：状态栏默认显示在标题栏右侧，用户可通过配置切换回窗口底部。
 - 理由：用户希望将状态信息移至右上角，同时保留位置选择。
 - 依据：用户 2026-11-13 明确要求“重构下状态栏，不再将起放在底部，而是放到靠右上角(当前标题栏)。做成一个可配置项吧”。
-- 关联：TITLEBAR-001、`status_bar.position`。
+- 关联：TITLEBAR-004、`status_bar.position`。
 
 ### TITLEBAR-003 前进与后退按钮位于标题栏“最近的项目”左侧
 
 - 状态：有效
-- 决策：编辑区标签栏不再显示“前进/后退”导航按钮；两个按钮显示在标题栏“最近的项目”入口左侧，作用于当前活动窗格，仍受 `tab_bar.show_nav_history_buttons` 控制。按钮悬挂在项目入口左侧，不改变 TITLEBAR-001 中项目入口居中的位置。
+- 决策：“前进/后退”按钮显示在标题栏“最近的项目”入口左侧，作用于当前活动窗格，受 `tab_bar.show_nav_history_buttons` 控制。按钮悬挂在项目入口左侧，项目入口保持居中。
 - 理由：用户希望导航按钮与项目入口相邻，释放标签栏空间。
 - 依据：用户 2026-11-16 明确要求“编辑窗口标题左侧的‘前进’和‘后退’按钮，放到顶部‘最近的项目’左侧显示”。
-- 关联：TITLEBAR-001、`crates/title_bar/src/title_bar.rs`、`crates/workspace/src/pane.rs`。
+- 关联：TITLEBAR-004、`crates/title_bar/src/title_bar.rs`、`crates/workspace/src/pane.rs`。
+
+### TITLEBAR-004 应用内标题栏使用分段按钮切换侧栏
+
+- 状态：有效
+- 决策：移除窗口内应用菜单栏。保留居中的“最近的项目”入口，标题栏省略当前工作树和 Git 分支的独立显示。默认在标题栏左侧通过分段按钮切换同一侧栏中的项目、搜索和 Git，工作区移除调试面板和大纲面板。编辑区用胶囊形文件标签，标签栏和编辑区使用相同底色。
+- 理由：用户很少使用菜单栏、调试及大纲，选择参考 Winc 的侧栏切换和编辑区标签样式。
+- 依据：用户 2026-11-22 给出 [Winc](https://github.com/DEEIX-AI/winc) 并明确要求移除菜单栏、调试面板和大纲，参照 Winc 呈现项目、搜索、Git 面板及编辑区标题。
+- 关联：TITLEBAR-002、TITLEBAR-003、GITUI-001、`crates/title_bar/src/title_bar.rs`、`crates/workspace/src/dock.rs`、`crates/workspace/src/pane.rs`。

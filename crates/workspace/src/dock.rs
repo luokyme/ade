@@ -98,6 +98,9 @@ pub trait Panel: Focusable + EventEmitter<PanelEvent> + Render + Sized {
     fn is_agent_panel(&self) -> bool {
         false
     }
+    fn sidebar_tab_order(&self) -> Option<u8> {
+        None
+    }
     /// Returns metadata describing how to hide this panel's button from the
     /// status bar by writing to user settings. Implementors should return
     /// `None` if the panel button cannot be hidden through settings.
@@ -136,6 +139,7 @@ pub trait PanelHandle: Send + Sync {
     fn activation_priority(&self, cx: &App) -> u32;
     fn enabled(&self, cx: &App) -> bool;
     fn is_agent_panel(&self, cx: &App) -> bool;
+    fn sidebar_tab_order(&self, cx: &App) -> Option<u8>;
     fn hide_button_setting(&self, cx: &App) -> Option<HideStatusItem>;
     fn move_to_next_position(&self, window: &mut Window, cx: &mut App) {
         let current_position = self.position(window, cx);
@@ -268,6 +272,10 @@ where
 
     fn is_agent_panel(&self, cx: &App) -> bool {
         self.read(cx).is_agent_panel()
+    }
+
+    fn sidebar_tab_order(&self, cx: &App) -> Option<u8> {
+        self.read(cx).sidebar_tab_order()
     }
 
     fn hide_button_setting(&self, cx: &App) -> Option<HideStatusItem> {
@@ -914,7 +922,14 @@ impl Dock {
         self.set_open_internal(serialized.visible, window, cx);
     }
 
-    pub(crate) fn finish_restoration(&mut self) {
+    pub(crate) fn finish_restoration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoration.pending().is_some() && self.is_open && self.active_panel().is_none() {
+            if let Ok(index) = self.first_enabled_panel_idx(cx) {
+                self.activate_panel_internal(index, window, cx);
+            } else {
+                self.set_open_internal(false, window, cx);
+            }
+        }
         self.restoration = DockRestoreState::Finished;
     }
 
@@ -1030,6 +1045,129 @@ impl Dock {
 
     pub fn panels(&self) -> impl Iterator<Item = &Arc<dyn PanelHandle>> {
         self.panel_entries.iter().map(|entry| &entry.panel)
+    }
+
+    pub fn render_sidebar_switcher(
+        dock: &Entity<Self>,
+        window: &Window,
+        cx: &App,
+    ) -> Option<gpui::Stateful<Div>> {
+        let sidebar = dock.read(cx);
+        let mut tabs: Vec<_> = sidebar
+            .panels()
+            .filter_map(|panel| {
+                Some((
+                    panel.sidebar_tab_order(cx)?,
+                    panel,
+                    panel.icon(window, cx)?,
+                    panel.icon_tooltip(window, cx)?,
+                ))
+            })
+            .collect();
+        if tabs.is_empty() {
+            return None;
+        }
+        tabs.sort_by_key(|(order, ..)| *order);
+
+        let visible_panel = sidebar.visible_panel().map(|panel| panel.panel_id());
+        let is_open = visible_panel.is_some();
+        let workspace = sidebar.workspace.clone();
+        let toggle = IconButton::new("toggle-sidebar", IconName::Split)
+            .icon_size(IconSize::Small)
+            .toggle_state(is_open)
+            .aria_label(t!("Toggle Left Dock"))
+            .tab_index(0isize)
+            .tooltip(|_, cx| {
+                Tooltip::for_action(t!("Toggle Left Dock"), &crate::ToggleLeftDock, cx)
+            })
+            .on_click(move |_, window, cx| {
+                workspace
+                    .update(cx, |workspace, cx| {
+                        workspace.toggle_dock(DockPosition::Left, window, cx);
+                    })
+                    .log_err();
+            });
+
+        let colors = cx.theme().colors();
+        Some(
+            h_flex()
+                .id("sidebar-switcher")
+                .gap_2()
+                .flex_none()
+                .child(toggle)
+                .when(is_open, |switcher| {
+                    switcher.child(
+                        h_flex()
+                            .gap(px(2.))
+                            .p(px(2.))
+                            .rounded_lg()
+                            .bg(colors.element_background)
+                            .children(tabs.into_iter().map(|(_, panel, icon, tooltip)| {
+                                let name = panel.panel_key();
+                                let selected = Some(panel.panel_id()) == visible_panel;
+                                let has_changes = panel.icon_label(window, cx).is_some();
+                                let action = panel.toggle_action(window, cx);
+                                let focus = if selected {
+                                    panel.activation_focus_handle(cx)
+                                } else {
+                                    sidebar.focus_handle(cx)
+                                };
+                                let panel = panel.clone();
+                                let dock = dock.clone();
+                                let workspace = sidebar.workspace.clone();
+
+                                right_click_menu(name)
+                                    .menu(move |window, cx| {
+                                        panel_button_context_menu(
+                                            &panel, &dock, &workspace, window, cx,
+                                        )
+                                    })
+                                    .anchor(Anchor::TopLeft)
+                                    .attach(Anchor::BottomLeft)
+                                    .trigger(move |_, _, _| {
+                                        let click_action = action.boxed_clone();
+                                        let tooltip_action = action.boxed_clone();
+                                        let focus = focus.clone();
+                                        IconButton::new((name, selected as u64), icon)
+                                            .width(px(28.))
+                                            .height(px(22.).into())
+                                            .icon_size(IconSize::Small)
+                                            .icon_color(Color::Muted)
+                                            .selected_icon_color(Color::Default)
+                                            .style(ButtonStyle::Subtle)
+                                            .selected_style(ButtonStyle::Outlined)
+                                            .toggle_state(selected)
+                                            .tab_index(0isize)
+                                            .aria_label(i18n::translate(tooltip))
+                                            .tooltip(move |_, cx| {
+                                                Tooltip::for_action(
+                                                    i18n::translate(tooltip),
+                                                    &*tooltip_action,
+                                                    cx,
+                                                )
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                if selected {
+                                                    focus.focus(window, cx);
+                                                } else {
+                                                    activate_panel_button(
+                                                        &focus,
+                                                        &*click_action,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            })
+                                            .when(has_changes, |button| {
+                                                button.indicator(
+                                                    ui::Indicator::dot().color(Color::Accent),
+                                                )
+                                            })
+                                    })
+                            })),
+                    )
+                }),
+        )
     }
 
     /// Returns the action a panel button should dispatch, its tooltip, and whether the
@@ -1503,6 +1641,11 @@ impl Render for PanelButtons {
             .iter()
             .enumerate()
             .filter_map(|(i, entry)| {
+                if dock_position == DockPosition::Left
+                    && entry.panel.sidebar_tab_order(cx).is_some()
+                {
+                    return None;
+                }
                 let icon = entry.panel.icon(window, cx)?;
                 let icon_tooltip = entry
                     .panel

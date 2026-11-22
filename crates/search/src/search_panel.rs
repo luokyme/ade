@@ -1711,6 +1711,10 @@ impl Panel for SearchPanel {
         4
     }
 
+    fn sidebar_tab_order(&self) -> Option<u8> {
+        Some(1)
+    }
+
     fn hide_button_setting(&self, _: &App) -> Option<HideStatusItem> {
         Some(HideStatusItem::new(|settings| {
             settings.search_panel.get_or_insert_default().button = Some(false);

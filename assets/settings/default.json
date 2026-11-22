@@ -851,7 +851,7 @@
   // Can be a combination of "left", "right" and "bottom".
   "resize_all_panels_in_dock": ["left"],
   "project_panel": {
-    // Whether to show the project panel button in the status bar
+    // Whether to show the project panel's switcher button.
     "button": true,
     // Whether to hide the gitignore entries in the project panel.
     "hide_gitignore": false,
@@ -987,7 +987,7 @@
     },
   },
   "search_panel": {
-    // Whether to show the search panel button in the activity bar
+    // Whether to show the search panel's switcher button.
     "button": true,
     // Default width of the search panel.
     "default_width": 300,
@@ -1061,7 +1061,7 @@
     "multi_buffer_hide_symbols": false,
   },
   "git_panel": {
-    // Whether to show the git panel button in the status bar.
+    // Whether to show the Git panel's switcher button.
     "button": true,
     // Where to dock the git panel. Can be 'left' or 'right'.
     "dock": "left",
@@ -1606,9 +1606,8 @@
   "load_direnv": "direct",
   // Activity bar-related settings.
   "activity_bar": {
-    // Whether to show the activity bar. It holds the buttons for the left
-    // and right dock panels, like the activity bar in VS Code.
-    "show": true,
+    // Show a vertical activity bar for dock panels outside the sidebar switcher.
+    "show": false,
     // Which side of the window the activity bar is on: "left" or "right".
     "position": "left",
     // Size of the activity bar icons, in pixels (12 to 48). The bar grows or

@@ -1,23 +1,16 @@
-mod application_menu;
 mod onboarding_banner;
 mod title_bar_settings;
 mod update_version;
 
-use crate::application_menu::{ApplicationMenu, show_menus};
 pub use platform_title_bar::{
     self, DraggedWindowTab, MergeAllWindows, MoveTabToNewWindow, PlatformTitleBar,
     ShowNextWindowTab, ShowPreviousWindowTab,
 };
 use project::repo_identity_path;
 
-#[cfg(not(target_os = "macos"))]
-use crate::application_menu::{
-    ActivateDirection, ActivateMenuLeft, ActivateMenuRight, OpenApplicationMenu,
-};
-
 use gpui::{
-    AnyElement, App, Context, Entity, EntityId, Focusable, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Render, Styled, Subscription, WeakEntity, Window, actions, div,
+    AnyElement, App, Context, Entity, EntityId, Focusable, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Render, Styled, Subscription, WeakEntity, Window, actions, div,
 };
 use i18n::t;
 use onboarding_banner::OnboardingBanner;
@@ -73,52 +66,6 @@ pub fn init(cx: &mut App) {
             {
                 titlebar.update(cx, |titlebar, cx| {
                     titlebar.toggle_update_simulation(cx);
-                });
-            }
-        });
-
-        #[cfg(not(target_os = "macos"))]
-        workspace.register_action(|workspace, action: &OpenApplicationMenu, window, cx| {
-            if let Some(titlebar) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<TitleBar>().ok())
-            {
-                titlebar.update(cx, |titlebar, cx| {
-                    if let Some(ref menu) = titlebar.application_menu {
-                        menu.update(cx, |menu, cx| menu.open_menu(action, window, cx));
-                    }
-                });
-            }
-        });
-
-        #[cfg(not(target_os = "macos"))]
-        workspace.register_action(|workspace, _: &ActivateMenuRight, window, cx| {
-            if let Some(titlebar) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<TitleBar>().ok())
-            {
-                titlebar.update(cx, |titlebar, cx| {
-                    if let Some(ref menu) = titlebar.application_menu {
-                        menu.update(cx, |menu, cx| {
-                            menu.navigate_menus_in_direction(ActivateDirection::Right, window, cx)
-                        });
-                    }
-                });
-            }
-        });
-
-        #[cfg(not(target_os = "macos"))]
-        workspace.register_action(|workspace, _: &ActivateMenuLeft, window, cx| {
-            if let Some(titlebar) = workspace
-                .titlebar_item()
-                .and_then(|item| item.downcast::<TitleBar>().ok())
-            {
-                titlebar.update(cx, |titlebar, cx| {
-                    if let Some(ref menu) = titlebar.application_menu {
-                        menu.update(cx, |menu, cx| {
-                            menu.navigate_menus_in_direction(ActivateDirection::Left, window, cx)
-                        });
-                    }
                 });
             }
         });
@@ -250,7 +197,6 @@ pub struct TitleBar {
     project: Entity<Project>,
     workspace: WeakEntity<Workspace>,
     multi_workspace: Option<WeakEntity<MultiWorkspace>>,
-    application_menu: Option<Entity<ApplicationMenu>>,
     _subscriptions: Vec<Subscription>,
     banner: Option<Entity<OnboardingBanner>>,
     update_version: Entity<UpdateVersion>,
@@ -280,7 +226,13 @@ impl Render for TitleBar {
             (workspace.status_bar_visible(cx) && workspace.status_bar_in_title_bar(cx))
                 .then(|| workspace.status_bar().clone())
         });
-        let show_menus = show_menus();
+        let sidebar_switcher = self.workspace.upgrade().and_then(|workspace| {
+            workspace::dock::Dock::render_sidebar_switcher(
+                workspace.read(cx).left_dock(),
+                window,
+                cx,
+            )
+        });
 
         let mut project_name = None;
         if let Some(worktree) = self.effective_active_worktree(cx) {
@@ -326,9 +278,7 @@ impl Render for TitleBar {
         let left = h_flex()
             .h_full()
             .gap_0p5()
-            .when(show_menus, |title_bar| {
-                title_bar.children(self.application_menu.clone())
-            })
+            .children(sidebar_switcher)
             .children(self.render_restricted_mode(cx))
             .when(title_bar_settings.show_project_items, |title_bar| {
                 title_bar.children(self.render_project_host(cx))
@@ -399,21 +349,7 @@ impl TitleBar {
     ) -> Self {
         let project = workspace.project().clone();
         let git_store = project.read(cx).git_store().clone();
-        let platform_style = PlatformStyle::platform();
-        let application_menu = match platform_style {
-            PlatformStyle::Mac => {
-                if option_env!("ZED_USE_CROSS_PLATFORM_MENU").is_some() {
-                    Some(cx.new(|cx| ApplicationMenu::new(window, cx)))
-                } else {
-                    None
-                }
-            }
-            PlatformStyle::Linux | PlatformStyle::Windows => {
-                Some(cx.new(|cx| ApplicationMenu::new(window, cx)))
-            }
-        };
-
-        let mut subscriptions = Vec::new();
+        let mut subscriptions = vec![cx.observe(workspace.left_dock(), |_, _, cx| cx.notify())];
         subscriptions.push(
             cx.observe(&workspace.weak_handle().upgrade().unwrap(), |_, _, cx| {
                 cx.notify()
@@ -463,7 +399,6 @@ impl TitleBar {
 
         let mut this = Self {
             platform_titlebar,
-            application_menu,
             workspace: workspace.weak_handle(),
             multi_workspace: multi_workspace.clone(),
             project,

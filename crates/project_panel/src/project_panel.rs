@@ -8516,6 +8516,10 @@ impl Panel for ProjectPanel {
         1
     }
 
+    fn sidebar_tab_order(&self) -> Option<u8> {
+        Some(0)
+    }
+
     fn hide_button_setting(&self, _: &App) -> Option<workspace::HideStatusItem> {
         Some(workspace::HideStatusItem::new(|settings| {
             settings.project_panel.get_or_insert_default().button = Some(false);

@@ -570,7 +570,6 @@ fn main() {
         #[cfg(target_os = "macos")]
         ade::move_to_applications::init(cx);
         project::Project::init(&client, cx);
-        debugger_ui::init(cx);
         debugger_tools::init(cx);
 
         let session = cx.foreground_executor().block_on(session);
@@ -633,7 +632,6 @@ fn main() {
         call_hierarchy::init(cx);
         project_symbols::init(cx);
         project_panel::init(cx);
-        outline_panel::init(cx);
         agent_chat::init(Some(agent_shell_env_rx), cx);
         tasks_ui::init(cx);
         snippets_ui::init(cx);

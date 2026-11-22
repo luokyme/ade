@@ -206,6 +206,9 @@ impl ActivityBar {
         let mut entries = Vec::new();
         for dock in [&self.left_dock, &self.right_dock] {
             for (panel_index, panel) in dock.read(cx).panels().enumerate() {
+                if dock == &self.left_dock && panel.sidebar_tab_order(cx).is_some() {
+                    continue;
+                }
                 let Some(icon) = panel.icon(window, cx) else {
                     continue;
                 };

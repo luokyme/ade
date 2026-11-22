@@ -17,7 +17,6 @@ pub use app_menus::*;
 
 use breadcrumbs::Breadcrumbs;
 use collections::VecDeque;
-use debugger_ui::debugger_panel::DebugPanel;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
 use fs::Fs;
@@ -46,7 +45,6 @@ use language_tools::lsp_log_view::LspLogToolbarItemView;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
 use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
-use outline_panel::OutlinePanel;
 use paths::{
     legacy_local_debug_file_relative_path, legacy_local_settings_file_relative_path,
     legacy_local_tasks_file_relative_path, local_debug_file_relative_path,
@@ -615,13 +613,11 @@ fn show_software_emulation_warning_if_needed(
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
     cx.spawn_in(window, async move |workspace_handle, cx| {
         let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
-        let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let search_panel = SearchPanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
         let agent_panel = agent_chat::AgentPanel::load(workspace_handle.clone(), cx.clone());
         let chat_panel = agent_chat::ChatPanel::load(workspace_handle.clone(), cx.clone());
-        let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
             panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
@@ -640,17 +636,15 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
 
         futures::join!(
             add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(search_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(agent_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(chat_panel, workspace_handle.clone(), cx.clone()),
         );
 
-        workspace_handle.update(cx, |workspace, cx| {
-            workspace.finish_dock_restoration(cx);
+        workspace_handle.update_in(cx, |workspace, window, cx| {
+            workspace.finish_dock_restoration(window, cx);
         })?;
 
         anyhow::Ok(())
@@ -992,14 +986,6 @@ fn register_actions(
              window: &mut Window,
              cx: &mut Context<Workspace>| {
                 workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &outline_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
             },
         )
         .register_action(
@@ -5177,7 +5163,7 @@ mod tests {
         // From the JetBrains keymap
         use workspace::ActivatePreviousItem;
         // From the VSCode keymap
-        use debugger_ui::Start;
+        use workspace::ToggleCenteredLayout;
 
         app_state
             .fs
@@ -5285,10 +5271,15 @@ mod tests {
         executor.run_until_parked();
 
         window
-            .update(cx, |_, _, cx| {
+            .update(cx, |_, window, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    workspace.register_action(|_, _: &Start, _window, _cx| {});
-                    cx.notify();
+                    workspace.register_action(|_, _: &ToggleCenteredLayout, _window, _cx| {});
+                    let project = workspace.project().clone();
+                    let buffer = project.update(cx, |project, cx| {
+                        project.create_local_buffer("", None, true, cx)
+                    });
+                    let editor = cx.new(|cx| Editor::for_buffer(buffer, Some(project), window, cx));
+                    workspace.add_item_to_active_pane(Box::new(editor), None, true, window, cx);
                 });
             })
             .unwrap();
@@ -5297,7 +5288,7 @@ mod tests {
         assert_key_bindings_for(
             window.into(),
             cx,
-            vec![("backspace", &ActionB), ("f5", &Start)],
+            vec![("backspace", &ActionB), ("z", &ToggleCenteredLayout)],
             line!(),
         );
     }
@@ -5712,7 +5703,6 @@ mod tests {
             editor::init(cx);
             git_ui::init(cx);
             project_panel::init(cx);
-            outline_panel::init(cx);
             agent_chat::init(None, cx);
             terminal_view::init(cx);
             image_viewer::init(cx);
@@ -5721,7 +5711,6 @@ mod tests {
                 &app_state.client.clone().into(),
             );
             project::debugger::dap_store::DapStore::init(&app_state.client.clone().into(), cx);
-            debugger_ui::init(cx);
             initialize_workspace(app_state.clone(), cx);
             search::init(cx);
             lsp_locations::init(cx);
