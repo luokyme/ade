@@ -7,6 +7,7 @@ use ::git::{
 };
 use buffer_diff::{BufferDiff, DiffHunkStatus, DiffHunkStatusKind};
 use project::git_store::Repository;
+use settings::GitHunkStyleSetting;
 
 #[derive(Clone)]
 struct ResolvedDiffHunk {
@@ -248,6 +249,35 @@ impl Editor {
         self.diff_hunk_renderer
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultDiffHunkRenderer))
+    }
+
+    pub(super) fn diff_hunk_hollow(&self, status: DiffHunkStatus, cx: &App) -> bool {
+        let unstaged = !self.diff_hunk_renderer().render_hunk_as_staged(&status, cx);
+        let unstaged_hollow = matches!(
+            ProjectSettings::get_global(cx).git.hunk_style,
+            GitHunkStyleSetting::UnstagedHollow
+        );
+        unstaged == unstaged_hollow
+    }
+
+    pub(super) fn diff_hunk_line_colors(
+        &self,
+        status: DiffHunkStatus,
+        cx: &App,
+    ) -> (Hsla, Option<Hsla>) {
+        let colors = cx.theme().colors();
+        match (status.is_deleted(), self.diff_hunk_hollow(status, cx)) {
+            (true, true) => (
+                colors.editor_diff_hunk_deleted_hollow_background,
+                Some(colors.editor_diff_hunk_deleted_hollow_border),
+            ),
+            (true, false) => (colors.editor_diff_hunk_deleted_background, None),
+            (false, true) => (
+                colors.editor_diff_hunk_added_hollow_background,
+                Some(colors.editor_diff_hunk_added_hollow_border),
+            ),
+            (false, false) => (colors.editor_diff_hunk_added_background, None),
+        }
     }
 
     pub fn set_diff_hunk_renderer(

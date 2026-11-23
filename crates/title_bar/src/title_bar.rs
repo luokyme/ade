@@ -294,7 +294,7 @@ impl Render for TitleBar {
         let left = h_flex()
             .h_full()
             .min_w_0()
-            .gap_0p5()
+            .gap_2()
             .children(sidebar_switcher)
             .children(self.render_restricted_mode(cx))
             .when(title_bar_settings.show_project_items, |title_bar| {
@@ -316,8 +316,8 @@ impl Render for TitleBar {
 
         let right = h_flex()
             .min_w_0()
-            .pr_1()
-            .gap_1()
+            .pr_0p5()
+            .gap_0p5()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .children(status_bar)
             .when(title_bar_settings.show_onboarding_banner, |title_bar| {

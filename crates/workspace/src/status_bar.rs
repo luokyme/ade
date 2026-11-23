@@ -131,7 +131,11 @@ impl Render for StatusBar {
             .gap(DynamicSpacing::Base08.rems(cx))
             .p(DynamicSpacing::Base04.rems(cx))
             .when(self.in_title_bar, |bar| {
-                bar.min_w_0().max_w_full().overflow_x_scroll()
+                bar.min_w_0()
+                    .max_w_full()
+                    .gap_1()
+                    .px_0p5()
+                    .overflow_x_scroll()
             })
             .when(!self.in_title_bar, |bar| {
                 bar.w_full()
@@ -173,7 +177,7 @@ impl StatusBar {
         h_flex()
             .gap_1()
             .min_w_0()
-            .when(self.in_title_bar, |tools| tools.flex_shrink_0())
+            .when(self.in_title_bar, |tools| tools.flex_shrink_0().gap_0p5())
             .overflow_x_hidden()
             .children(self.left_items.iter().enumerate().map(|(index, item)| {
                 render_hideable_item("status-bar-left", index, item.as_ref(), cx)
@@ -184,6 +188,7 @@ impl StatusBar {
         h_flex()
             .flex_shrink_0()
             .gap_1()
+            .when(self.in_title_bar, |tools| tools.gap_0p5())
             .overflow_x_hidden()
             .children(
                 self.right_items

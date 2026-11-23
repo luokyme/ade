@@ -1,5 +1,6 @@
 use std::{cmp, ops::Range};
 
+use buffer_diff::DiffHunkStatus;
 use collections::{HashMap, HashSet};
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, Context, DragMoveEvent, Element,
@@ -181,7 +182,7 @@ impl RenderOnce for SplitEditorView {
                 px(1.)
             },
             if show_connections {
-                colors.editor_background
+                rhs_editor.read(cx).gutter_background(cx)
             } else {
                 colors.border_variant
             },
@@ -289,18 +290,16 @@ fn render_change_connections(
             let right_bounds = right.read(cx).last_bounds().copied()?;
             let left_snapshot = left.update(cx, |editor, cx| editor.snapshot(window, cx));
             let right_snapshot = right.update(cx, |editor, cx| editor.snapshot(window, cx));
-            let start_x = left_bounds.right();
-            let end_x = right_bounds.left();
+            let start_x = window.pixel_snap(left_bounds.right());
+            let end_x = window.pixel_snap(right_bounds.left());
             if end_x <= start_x {
                 return None;
             }
             let gap =
                 Bounds::from_corners(point(start_x, bounds.top()), point(end_x, bounds.bottom()));
 
-            let left_scroll =
-                window.pixel_snap_f64(left_snapshot.scroll_position().y * f64::from(line_height));
-            let right_scroll =
-                window.pixel_snap_f64(right_snapshot.scroll_position().y * f64::from(line_height));
+            let left_scroll = left_snapshot.scroll_position().y * f64::from(line_height);
+            let right_scroll = right_snapshot.scroll_position().y * f64::from(line_height);
             let position = |scroll, row: DisplayRow| {
                 bounds.top() + Pixels::from(row.as_f64() * f64::from(line_height) - scroll)
             };
@@ -333,26 +332,28 @@ fn render_change_connections(
                 let matching_left = left_hunk
                     .as_ref()
                     .map(|hunk| (span(&left_snapshot, hunk, left_scroll), hunk));
-                if let Some((from, _)) = matching_left.as_ref()
+                if let Some((from, left_hunk)) = matching_left.as_ref()
                     && (!from.is_empty() || !to.is_empty())
                     && from.end.max(to.end) >= gap.top()
                     && from.start.min(to.start) <= gap.bottom()
                 {
-                    let mut left_span = from.clone();
-                    let mut right_span = to.clone();
-                    let (left_edge, left_color) = if left_span.is_empty() {
-                        let top = window.pixel_snap(left_span.start);
-                        left_span = top..top + px(1.);
+                    let mut left_span = window.pixel_snap(from.start)..window.pixel_snap(from.end);
+                    let mut right_span = window.pixel_snap(to.start)..window.pixel_snap(to.end);
+                    let (left_edge, left_color) = if from.is_empty() {
+                        left_span.end += px(1.);
                         (left_bounds.left(), colors.created_border)
                     } else {
-                        (start_x, colors.deleted_background)
+                        let status = DiffHunkStatus::deleted(left_hunk.status.secondary);
+                        let (background, _) = left.read(cx).diff_hunk_line_colors(status, cx);
+                        (start_x, background)
                     };
-                    let (right_edge, right_color) = if right_span.is_empty() {
-                        let top = window.pixel_snap(right_span.start);
-                        right_span = top..top + px(1.);
+                    let (right_edge, right_color) = if to.is_empty() {
+                        right_span.end += px(1.);
                         (right_bounds.right(), colors.deleted_border)
                     } else {
-                        (end_x, colors.created_background)
+                        let status = DiffHunkStatus::added(hunk.status.secondary);
+                        let (background, _) = right.read(cx).diff_hunk_line_colors(status, cx);
+                        (end_x, background)
                     };
                     if let Some(path) =
                         change_connection_path(gap, left_edge..right_edge, left_span, right_span)
@@ -368,12 +369,14 @@ fn render_change_connections(
                 }
 
                 let endpoints = matching_left
-                    .map(|(from, hunk)| (&left, hunk, from.start, true))
+                    .map(|(from, hunk)| (&left, hunk, from, true))
                     .into_iter()
-                    .chain([(&right, &hunk, to.start, false)]);
+                    .chain([(&right, &hunk, to, false)]);
                 window.with_content_mask(Some(ContentMask { bounds: gap }), |window| {
-                    for (editor, hunk, y, left_side) in endpoints {
-                        if y < gap.top() || y + line_height > gap.bottom() {
+                    for (editor, hunk, span, left_side) in endpoints {
+                        let visible_start = span.start.max(gap.top());
+                        let visible_end = span.end.min(gap.bottom());
+                        if visible_start > visible_end {
                             continue;
                         }
                         let renderer = editor.read(cx).diff_hunk_renderer();
@@ -389,6 +392,10 @@ fn render_change_connections(
                         );
                         let size =
                             element.layout_as_root(size(px(24.), line_height).into(), window, cx);
+                        let y = window.pixel_snap((visible_start + visible_end - size.height) / 2.);
+                        if y < gap.top() || y + size.height > gap.bottom() {
+                            continue;
+                        }
                         let x = if left_side {
                             gap.left() + px(2.)
                         } else {

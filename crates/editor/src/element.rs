@@ -66,10 +66,7 @@ use project::{
     debugger::breakpoint_store::{Breakpoint, BreakpointSessionState},
     project_settings::{InlineBlameLocation, ProjectSettings},
 };
-use settings::{
-    GitGutterSetting, GitHunkStyleSetting, IndentGuideBackgroundColoring, IndentGuideColoring,
-    Settings,
-};
+use settings::{GitGutterSetting, IndentGuideBackgroundColoring, IndentGuideColoring, Settings};
 use smallvec::{SmallVec, smallvec};
 use std::{
     any::TypeId,
@@ -5285,7 +5282,7 @@ impl EditorElement {
                         .editor_background
                         .blend(background_color);
 
-                    if !self.diff_hunk_hollow(status, cx) {
+                    if !self.editor.read(cx).diff_hunk_hollow(status, cx) {
                         window.paint_quad(quad(
                             hunk_bounds,
                             corner_radii,
@@ -6761,20 +6758,6 @@ impl EditorElement {
             &[run],
             None,
         )
-    }
-
-    fn diff_hunk_hollow(&self, status: DiffHunkStatus, cx: &mut App) -> bool {
-        let unstaged = !self
-            .editor
-            .read(cx)
-            .diff_hunk_renderer()
-            .render_hunk_as_staged(&status, cx);
-        let unstaged_hollow = matches!(
-            ProjectSettings::get_global(cx).git.hunk_style,
-            GitHunkStyleSetting::UnstagedHollow
-        );
-
-        unstaged == unstaged_hollow
     }
 
     #[cfg(debug_assertions)]
@@ -8649,64 +8632,27 @@ impl Element for EditorElement {
                         })
                         .unwrap_or_default();
 
-                    struct DiffHunkHighlightColors {
-                        filled_background: Hsla,
-                        hollow_background: Hsla,
-                        hollow_border: Hsla,
-                    }
-
-                    let colors = cx.theme().colors();
-                    let added_diff_hunk_colors = DiffHunkHighlightColors {
-                        filled_background: colors.editor_diff_hunk_added_background,
-                        hollow_background: colors.editor_diff_hunk_added_hollow_background,
-                        hollow_border: colors.editor_diff_hunk_added_hollow_border,
-                    };
-                    let deleted_diff_hunk_colors = DiffHunkHighlightColors {
-                        filled_background: colors.editor_diff_hunk_deleted_background,
-                        hollow_background: colors.editor_diff_hunk_deleted_hollow_background,
-                        hollow_border: colors.editor_diff_hunk_deleted_hollow_border,
-                    };
-
+                    let editor = self.editor.read(cx);
                     for (ix, row_info) in row_infos.iter().enumerate() {
                         let Some(diff_status) = row_info.diff_status else {
                             continue;
                         };
-
-                        let diff_hunk_colors = match diff_status.kind {
-                            DiffHunkStatusKind::Added => &added_diff_hunk_colors,
-                            DiffHunkStatusKind::Deleted => &deleted_diff_hunk_colors,
-                            DiffHunkStatusKind::Modified => {
-                                debug_panic!("modified diff status for row info");
-                                continue;
-                            }
-                        };
-
-                        let hollow_highlight = LineHighlight {
-                            background: diff_hunk_colors.hollow_background.into(),
-                            border: Some(diff_hunk_colors.hollow_border),
-                            include_gutter: true,
-                            type_id: None,
-                        };
-
-                        let filled_highlight = LineHighlight {
-                            background: solid_background(diff_hunk_colors.filled_background),
-                            border: None,
-                            include_gutter: true,
-                            type_id: None,
-                        };
-
-                        let background = if self.diff_hunk_hollow(diff_status, cx) {
-                            hollow_highlight
-                        } else {
-                            filled_highlight
-                        };
-
+                        if diff_status.is_modified() {
+                            debug_panic!("modified diff status for row info");
+                            continue;
+                        }
+                        let (background, border) = editor.diff_hunk_line_colors(diff_status, cx);
                         let base_display_point =
                             DisplayPoint::new(start_row + DisplayRow(ix as u32), 0);
 
                         highlighted_rows
                             .entry(base_display_point.row())
-                            .or_insert(background);
+                            .or_insert(LineHighlight {
+                                background: solid_background(background),
+                                border,
+                                include_gutter: true,
+                                type_id: None,
+                            });
                     }
 
                     let highlighted_gutter_ranges =
