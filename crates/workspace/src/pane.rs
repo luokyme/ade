@@ -2907,7 +2907,7 @@ impl Pane {
         ix: usize,
         item: &dyn ItemHandle,
         detail: usize,
-        focus_handle: &FocusHandle,
+        in_title_bar: bool,
         window: &mut Window,
         cx: &mut Context<Pane>,
     ) -> impl IntoElement + use<> {
@@ -2939,6 +2939,7 @@ impl Pane {
         let tab_tooltip_content = item.tab_tooltip_content(cx);
         let item_id = item.item_id();
         let is_pinned = self.is_tab_pinned(ix);
+        let compact_close = in_title_bar && !is_pinned;
 
         let read_only_toggle = |toggleable: bool| {
             IconButton::new("toggle_read_only", IconName::FileLock)
@@ -2971,6 +2972,7 @@ impl Pane {
         let capability = item.capability(cx);
         let has_indicator = indicator.is_some();
         let tab = Tab::new(ix)
+            .when(compact_close, Tab::compact)
             .close_side(match close_side {
                 ClosePosition::Left => ui::TabCloseSide::Start,
                 ClosePosition::Right => ui::TabCloseSide::End,
@@ -3077,26 +3079,27 @@ impl Pane {
                         close_pinned: false,
                     };
                     end_slot_tooltip_text = t!("Close Tab");
-                    match show_close_button {
-                        ShowCloseButton::Always => IconButton::new("close tab", IconName::Close)
-                            .when(has_indicator, |button| button.visible_on_hover("")),
-                        ShowCloseButton::Hover => {
-                            IconButton::new("close tab", IconName::Close).visible_on_hover("")
-                        }
-                        ShowCloseButton::Hidden => return this,
+                    if *show_close_button == ShowCloseButton::Hidden {
+                        return this;
                     }
-                    .shape(IconButtonShape::Square)
-                    .icon_color(Color::Muted)
-                    .size(ButtonSize::None)
-                    .icon_size(IconSize::Small)
-                    .on_click(cx.listener(move |pane, _, window, cx| {
-                        pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
-                            .detach_and_log_err(cx);
-                    }))
+                    IconButton::new("close tab", IconName::Close)
+                        .when(
+                            !compact_close
+                                && (has_indicator || *show_close_button == ShowCloseButton::Hover),
+                            |button| button.visible_on_hover(""),
+                        )
+                        .shape(IconButtonShape::Square)
+                        .icon_color(Color::Muted)
+                        .size(ButtonSize::None)
+                        .icon_size(IconSize::Small)
+                        .on_click(cx.listener(move |pane, _, window, cx| {
+                            pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
+                                .detach_and_log_err(cx);
+                        }))
                 }
                 .map(|this| {
                     if is_active {
-                        let focus_handle = focus_handle.clone();
+                        let focus_handle = self.focus_handle.clone();
                         this.tooltip(move |window, cx| {
                             Tooltip::for_action_in(
                                 end_slot_tooltip_text.clone(),
@@ -3116,7 +3119,7 @@ impl Pane {
                     .id(("pane-tab-content", ix))
                     .flex_1()
                     .min_w_0()
-                    .gap(px(6.))
+                    .gap(if in_title_bar { px(4.) } else { px(6.) })
                     .children(if let Some(icon) = icon {
                         Some(tab_icon_slot(icon, is_active).into_any_element())
                     } else if !capability.editable() {
@@ -3530,7 +3533,7 @@ impl Pane {
             return gpui::Empty.into_any();
         }
 
-        let mut tab_items = self.render_tab_items(window, cx);
+        let mut tab_items = self.render_tab_items(false, window, cx);
         let tab_count = tab_items.len();
         let unpinned_tabs = tab_items.split_off(self.pinned_tab_count);
         let pinned_tabs = tab_items;
@@ -3556,7 +3559,7 @@ impl Pane {
             return None;
         }
 
-        let tabs = self.render_tab_items(window, cx);
+        let tabs = self.render_tab_items(true, window, cx);
         let tab_count = tabs.len();
         let trailing_button = (self.render_trailing_tab_button.clone())(self, window, cx);
         let (start_buttons, end_buttons) = self.tab_bar_buttons(window, cx);
@@ -3574,16 +3577,19 @@ impl Pane {
         )
     }
 
-    fn render_tab_items(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let focus_handle = self.focus_handle.clone();
-
+    fn render_tab_items(
+        &mut self,
+        in_title_bar: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let tab_items = self
             .items
             .iter()
             .enumerate()
             .zip(tab_details(&self.items, window, cx))
             .map(|((ix, item), detail)| {
-                self.render_tab(ix, &**item, detail, &focus_handle, window, cx)
+                self.render_tab(ix, &**item, detail, in_title_bar, window, cx)
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -3712,10 +3718,13 @@ impl Pane {
         h_flex()
             .id(id)
             .overflow_x_scroll()
-            .when(in_title_bar, |tabs| tabs.min_w_0())
-            .when(!in_title_bar, |tabs| tabs.w_full())
-            .gap_1()
-            .px_1()
+            .map(|tabs| {
+                if in_title_bar {
+                    tabs.min_w_0().gap(px(2.)).px(px(2.))
+                } else {
+                    tabs.w_full().gap_1().px_1()
+                }
+            })
             .track_scroll(scroll_handle)
             .on_scroll_wheel(cx.listener(|this, _, _, _| {
                 this.suppress_scroll = true;

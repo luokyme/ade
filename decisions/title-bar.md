@@ -48,3 +48,11 @@
 - 理由：用户希望将项目入口、导航按钮和文件标签集中在窗口标题栏。用户很少使用菜单栏、调试及大纲，侧栏切换和文件标签样式沿用 TITLEBAR-004 中参考 Winc 的选择。
 - 依据：用户 2026-11-23 明确要求“把编辑区打开文件的titile 也放到标题栏中，不再保留编辑区原来的标题栏”。项目入口和导航顺序依据见 TITLEBAR-006。
 - 关联：TITLEBAR-002、GITUI-001、`crates/title_bar/src/title_bar.rs`、`crates/workspace/src/dock.rs`、`crates/workspace/src/pane.rs`。
+
+### TITLEBAR-008 标题栏文件标签使用紧凑布局
+
+- 状态：有效
+- 决策：标题栏的文件标签紧凑排列。可关闭的标签在鼠标悬停时于右侧浮动显示关闭按钮，按钮不占用独立横向空间。
+- 理由：将横向空间留给文件名，在同一行显示更多文件标签。
+- 依据：用户 2026-11-23 明确要求“编辑窗口的titile的横向空间需要紧凑点，并且关闭按钮不要占用独立的横向空间，鼠标放上去的时候靠右侧悬浮显示即可”。
+- 关联：TITLEBAR-007、`crates/ui/src/components/tab.rs`、`crates/workspace/src/pane.rs`。
