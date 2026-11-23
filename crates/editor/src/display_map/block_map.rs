@@ -809,6 +809,8 @@ impl BlockMap {
         mut edits: WrapPatch,
         companion_view: Option<CompanionView>,
     ) {
+        // File folding can be shared without introducing alignment spacer rows.
+        let companion_view = companion_view.filter(|view| view.companion.align_rows);
         let buffer = wrap_snapshot.buffer_snapshot();
 
         edits = self.deferred_edits.take().compose(edits);
@@ -2204,6 +2206,33 @@ impl BlockMapWriter<'_> {
 }
 
 impl BlockSnapshot {
+    pub(super) fn pad_file_boundaries(&mut self, padding: Vec<(BlockRow, u32)>) {
+        if padding.is_empty() {
+            return;
+        }
+        let mut cursor = self.transforms.cursor::<BlockRow>(());
+        let mut padded = SumTree::default();
+        for (row, height) in padding {
+            padded.append(cursor.slice(&row, Bias::Right), ());
+            padded.push(
+                Transform {
+                    summary: TransformSummary {
+                        output_rows: BlockRow(height),
+                        ..Default::default()
+                    },
+                    block: Some(Block::Spacer {
+                        id: SpacerId(row.0 as usize),
+                        height,
+                        is_below: true,
+                    }),
+                },
+                (),
+            );
+        }
+        padded.append(cursor.suffix(), ());
+        self.transforms = padded;
+    }
+
     #[inline(always)]
     pub fn has_replacement_blocks(&self) -> bool {
         self.transforms.summary().has_replacement_blocks

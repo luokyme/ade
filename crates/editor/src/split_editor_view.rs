@@ -205,7 +205,16 @@ impl RenderOnce for SplitEditorView {
             lhs_editor.clone(),
             rhs_editor.clone(),
             self.style.clone(),
+            show_connections.then_some(SplitSide::Right),
         );
+        let left_buffer_headers = show_connections.then(|| {
+            SplitBufferHeadersElement::new(
+                lhs_editor.clone(),
+                rhs_editor.clone(),
+                self.style.clone(),
+                Some(SplitSide::Left),
+            )
+        });
 
         let lhs_editor_for_order = lhs_editor;
         let rhs_editor_for_order = rhs_editor;
@@ -263,6 +272,7 @@ impl RenderOnce for SplitEditorView {
                     ),
             )
             .children(connections)
+            .children(left_buffer_headers)
             .child(buffer_headers)
     }
 }
@@ -298,34 +308,20 @@ fn render_change_connections(
                 let rows = snapshot.diff_hunk_display_rows(hunk);
                 position(scroll, rows.start)..position(scroll, rows.end)
             };
-            let left_hunks = left_snapshot
-                .buffer_snapshot()
-                .diff_hunks()
-                .map(|hunk| {
-                    let y = span(&left_snapshot, &hunk, left_scroll);
-                    (hunk.diff_base_byte_range.clone(), (y, hunk))
-                })
-                .collect::<HashMap<_, _>>();
             let mut ribbons = Vec::new();
             let mut insertion_markers = Vec::new();
             let mut controls = Vec::new();
-            let fold_spans = |snapshot: &EditorSnapshot, scroll| {
-                snapshot
-                    .blocks_in_range(DisplayRow(0)..DisplayRow(snapshot.max_point().row().0 + 1))
-                    .filter_map(|(row, block)| {
-                        let Block::ExcerptBoundary { .. } = block else {
-                            return None;
-                        };
-                        let top = position(scroll, row) + line_height / 2.;
-                        Some(top..top + px(1.))
-                    })
-                    .collect::<Vec<_>>()
-            };
             let fold_color = cx.theme().colors().border_variant;
-            for (from, to) in fold_spans(&left_snapshot, left_scroll)
-                .into_iter()
-                .zip(fold_spans(&right_snapshot, right_scroll))
+            for (left_row, right_row, block) in
+                left_snapshot.paired_diff_boundaries(&right_snapshot)
             {
+                if !matches!(block, Block::ExcerptBoundary { .. }) {
+                    continue;
+                }
+                let left_top = position(left_scroll, left_row) + line_height / 2.;
+                let right_top = position(right_scroll, right_row) + line_height / 2.;
+                let from = left_top..left_top + px(1.);
+                let to = right_top..right_top + px(1.);
                 if from.end.max(to.end) >= gap.top()
                     && from.start.min(to.start) <= gap.bottom()
                     && let Some(path) = change_connection_path(gap, from, to)
@@ -333,10 +329,12 @@ fn render_change_connections(
                     ribbons.push((path, fold_color.into()));
                 }
             }
-            for hunk in right_snapshot.buffer_snapshot().diff_hunks() {
+            for (left_hunk, hunk) in left_snapshot.paired_diff_hunks(&right_snapshot) {
                 let to = span(&right_snapshot, &hunk, right_scroll);
-                let matching_left = left_hunks.get(&hunk.diff_base_byte_range);
-                if let Some((from, _)) = matching_left
+                let matching_left = left_hunk
+                    .as_ref()
+                    .map(|hunk| (span(&left_snapshot, hunk, left_scroll), hunk));
+                if let Some((from, _)) = matching_left.as_ref()
                     && (!from.is_empty() || !to.is_empty())
                     && from.end.max(to.end) >= gap.top()
                     && from.start.min(to.start) <= gap.bottom()
@@ -464,14 +462,21 @@ struct SplitBufferHeadersElement {
     lhs_editor: Entity<Editor>,
     rhs_editor: Entity<Editor>,
     style: EditorStyle,
+    pane: Option<SplitSide>,
 }
 
 impl SplitBufferHeadersElement {
-    fn new(lhs_editor: Entity<Editor>, rhs_editor: Entity<Editor>, style: EditorStyle) -> Self {
+    fn new(
+        lhs_editor: Entity<Editor>,
+        rhs_editor: Entity<Editor>,
+        style: EditorStyle,
+        pane: Option<SplitSide>,
+    ) -> Self {
         Self {
             lhs_editor,
             rhs_editor,
             style,
+            pane,
         }
     }
 }
@@ -499,7 +504,13 @@ impl Element for SplitBufferHeadersElement {
     type PrepaintState = SplitBufferHeadersPrepaintState;
 
     fn id(&self) -> Option<gpui::ElementId> {
-        Some("split-buffer-headers".into())
+        Some(
+            match self.pane {
+                Some(SplitSide::Left) => "split-left-buffer-headers",
+                _ => "split-buffer-headers",
+            }
+            .into(),
+        )
     }
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
@@ -615,16 +626,39 @@ impl SplitBufferHeadersElement {
         cx: &mut App,
     ) -> SplitBufferHeadersPrepaintState {
         let line_height = window.line_height();
-
-        let snapshot = self
+        let source = self
             .rhs_editor
             .update(cx, |editor, cx| editor.snapshot(window, cx));
+        let pane = self.pane.filter(|_| source.uses_diff_scroll_map());
+        if self.pane == Some(SplitSide::Left) && pane.is_none() {
+            return SplitBufferHeadersPrepaintState {
+                content_bounds: bounds,
+                sticky_header: None,
+                non_sticky_headers: Vec::new(),
+            };
+        }
+        let left_snapshot = (self.pane == Some(SplitSide::Left)).then(|| {
+            self.lhs_editor
+                .update(cx, |editor, cx| editor.snapshot(window, cx))
+        });
+        let snapshot = left_snapshot.as_ref().unwrap_or(&source);
+        let pane_editor = match pane {
+            Some(SplitSide::Left) => Some(&self.lhs_editor),
+            Some(SplitSide::Right) => Some(&self.rhs_editor),
+            None => None,
+        };
+        let bounds = pane_editor
+            .and_then(|editor| editor.read(cx).last_bounds())
+            .map_or(bounds, |pane_bounds| pane_bounds.intersect(&bounds));
         let scroll_position = snapshot.scroll_position();
 
         // Compute right margin to avoid overlapping the scrollbar
         let content_bounds = self.content_bounds(bounds, cx);
         let available_width = (content_bounds.size.width
-            - self.rhs_editor.read(cx).last_right_margin())
+            - pane_editor
+                .unwrap_or(&self.rhs_editor)
+                .read(cx)
+                .last_right_margin())
         .max(Pixels::ZERO);
 
         let visible_height_in_lines = content_bounds.size.height / line_height;
@@ -637,15 +671,16 @@ impl SplitBufferHeadersElement {
         let end_row = DisplayRow(end_row);
 
         let (selected_buffer_ids, latest_selection_anchors) =
-            self.compute_selection_info(&snapshot, cx);
+            self.compute_selection_info(&source, cx);
 
         let sticky_header = if snapshot.buffer_snapshot().show_headers() {
             snapshot
                 .sticky_header_excerpt(scroll_position.y)
-                .map(|sticky_excerpt| {
+                .and_then(|sticky_excerpt| {
                     self.build_sticky_header(
                         sticky_excerpt,
-                        &snapshot,
+                        snapshot,
+                        &source,
                         scroll_position,
                         content_bounds,
                         available_width,
@@ -667,7 +702,8 @@ impl SplitBufferHeadersElement {
             .map(|e| e.excerpt);
 
         let non_sticky_headers = self.build_non_sticky_headers(
-            &snapshot,
+            snapshot,
+            &source,
             scroll_position,
             content_bounds,
             available_width,
@@ -755,6 +791,7 @@ impl SplitBufferHeadersElement {
         &self,
         StickyHeaderExcerpt { excerpt }: StickyHeaderExcerpt<'_>,
         snapshot: &EditorSnapshot,
+        source: &EditorSnapshot,
         scroll_position: gpui::Point<ScrollOffset>,
         bounds: Bounds<Pixels>,
         available_width: Pixels,
@@ -765,10 +802,16 @@ impl SplitBufferHeadersElement {
         end_row: DisplayRow,
         window: &mut Window,
         cx: &mut App,
-    ) -> AnyElement {
-        let jump_data = header_jump_data(
+    ) -> Option<AnyElement> {
+        let (excerpt, jump_row) = self.source_header(
             snapshot,
+            source,
+            excerpt,
             DisplayRow(scroll_position.y as u32),
+        )?;
+        let jump_data = header_jump_data(
+            source,
+            jump_row,
             FILE_HEADER_HEIGHT + MULTI_BUFFER_EXCERPT_HEADER_HEIGHT,
             excerpt,
             latest_selection_anchors,
@@ -835,12 +878,13 @@ impl SplitBufferHeadersElement {
 
         Self::prepaint_header(&mut header, origin, available_size, bounds, window, cx);
 
-        header
+        Some(header)
     }
 
     fn build_non_sticky_headers(
         &self,
         snapshot: &EditorSnapshot,
+        source: &EditorSnapshot,
         scroll_position: gpui::Point<ScrollOffset>,
         bounds: Bounds<Pixels>,
         available_width: Pixels,
@@ -868,10 +912,15 @@ impl SplitBufferHeadersElement {
                 Block::ExcerptBoundary { .. } | Block::Custom(_) | Block::Spacer { .. } => continue,
             };
 
+            let Some((excerpt, jump_row)) =
+                self.source_header(snapshot, source, excerpt, block_row)
+            else {
+                continue;
+            };
             let selected = selected_buffer_ids.contains(&excerpt.buffer_id());
             let jump_data = header_jump_data(
-                snapshot,
-                block_row,
+                source,
+                jump_row,
                 block.height(),
                 excerpt,
                 latest_selection_anchors,
@@ -903,6 +952,32 @@ impl SplitBufferHeadersElement {
         }
 
         headers
+    }
+
+    fn source_header<'a>(
+        &self,
+        snapshot: &EditorSnapshot,
+        source: &'a EditorSnapshot,
+        excerpt: &'a ExcerptBoundaryInfo,
+        row: DisplayRow,
+    ) -> Option<(&'a ExcerptBoundaryInfo, DisplayRow)> {
+        if self.pane != Some(SplitSide::Left) {
+            return Some((excerpt, row));
+        }
+        let id = snapshot
+            .buffer_snapshot()
+            .diff_for_buffer_id(excerpt.buffer_id())?
+            .buffer_id();
+        source
+            .blocks_in_range(DisplayRow(0)..source.max_point().row().next_row())
+            .find_map(|(row, block)| {
+                let excerpt = match block {
+                    Block::BufferHeader { excerpt, .. } => excerpt,
+                    Block::FoldedBuffer { first_excerpt, .. } => first_excerpt,
+                    _ => return None,
+                };
+                (excerpt.buffer_id() == id).then_some((excerpt, row))
+            })
     }
 
     fn prepaint_header(

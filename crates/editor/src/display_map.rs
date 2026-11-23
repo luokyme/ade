@@ -104,8 +104,9 @@ use language::{
 };
 
 use multi_buffer::{
-    Anchor, AnchorRangeExt, MultiBuffer, MultiBufferDiffHunk, MultiBufferOffset, MultiBufferOffsetUtf16,
-    MultiBufferPoint, MultiBufferRow, MultiBufferSnapshot, RowInfo, ToOffset, ToPoint,
+    Anchor, AnchorRangeExt, MultiBuffer, MultiBufferDiffHunk, MultiBufferOffset,
+    MultiBufferOffsetUtf16, MultiBufferPoint, MultiBufferRow, MultiBufferSnapshot, RowInfo,
+    ToOffset, ToPoint,
 };
 use project::project_settings::DiagnosticSeverity;
 use project::{InlayId, lsp_store::LspFoldingRange, lsp_store::TokenType};
@@ -124,6 +125,7 @@ use std::collections::hash_map::Entry;
 use std::{
     any::TypeId,
     borrow::Cow,
+    collections::VecDeque,
     fmt::Debug,
     iter,
     num::NonZeroU32,
@@ -575,6 +577,7 @@ impl DisplayMap {
     fn with_synced_companion_mut<R>(
         display_map_id: EntityId,
         companion: &Option<(WeakEntity<DisplayMap>, Entity<Companion>)>,
+        for_buffer_folding: bool,
         cx: &mut App,
         callback: impl FnOnce(Option<CompanionViewMut<'_>>, &mut App) -> R,
     ) -> R {
@@ -584,7 +587,7 @@ impl DisplayMap {
         let Some(companion_display_map) = companion_display_map.upgrade() else {
             return callback(None, cx);
         };
-        if !companion.read(cx).align_rows {
+        if !for_buffer_folding && !companion.read(cx).align_rows {
             return callback(None, cx);
         }
         companion_display_map.update(cx, |companion_display_map, cx| {
@@ -663,18 +666,14 @@ impl DisplayMap {
 
         let companion_display_snapshot = self.companion.as_ref().and_then(|(companion_dm, _)| {
             companion_dm
-                .update(cx, |dm, cx| Arc::new(dm.snapshot_simple(cx)))
+                .update(cx, |dm, cx| dm.snapshot_simple(cx))
                 .ok()
         });
 
-        DisplaySnapshot {
+        let mut snapshot = DisplaySnapshot {
             display_map_id: self.entity_id,
-            companion_display_snapshot,
-            diff_scroll_map: self.companion.as_ref().and_then(|(_, companion)| {
-                let companion = companion.read(cx);
-                (!companion.align_rows)
-                    .then(|| (companion.is_rhs(self.entity_id), Arc::new(OnceLock::new())))
-            }),
+            companion_display_snapshot: None,
+            diff_scroll_map: None,
             block_snapshot,
             diagnostics_max_severity: self.diagnostics_max_severity,
             crease_snapshot: self.crease_map.snapshot(),
@@ -685,7 +684,25 @@ impl DisplayMap {
             masked: self.masked,
             use_lsp_folding_ranges: !self.lsp_folding_crease_ids.is_empty(),
             fold_placeholder: self.fold_placeholder.clone(),
+        };
+        if let Some(mut companion_snapshot) = companion_display_snapshot {
+            if let Some((_, companion)) = &self.companion {
+                let companion = companion.read(cx);
+                if !companion.align_rows {
+                    let is_rhs = companion.is_rhs(self.entity_id);
+                    let aligned_files = if is_rhs {
+                        DisplaySnapshot::align_diff_files(&mut companion_snapshot, &mut snapshot)
+                    } else {
+                        DisplaySnapshot::align_diff_files(&mut snapshot, &mut companion_snapshot)
+                    };
+                    if !aligned_files {
+                        snapshot.diff_scroll_map = Some((is_rhs, Arc::new(OnceLock::new())));
+                    }
+                }
+            }
+            snapshot.companion_display_snapshot = Some(Arc::new(companion_snapshot));
         }
+        snapshot
     }
 
     fn snapshot_simple(&mut self, cx: &mut Context<Self>) -> DisplaySnapshot {
@@ -899,6 +916,7 @@ impl DisplayMap {
         Self::with_synced_companion_mut(
             self.entity_id,
             &self.companion,
+            true,
             cx,
             |companion_view, cx| {
                 self.block_map
@@ -925,6 +943,7 @@ impl DisplayMap {
         Self::with_synced_companion_mut(
             self.entity_id,
             &self.companion,
+            true,
             cx,
             |companion_view, cx| {
                 self.block_map
@@ -1046,6 +1065,7 @@ impl DisplayMap {
         Self::with_synced_companion_mut(
             self.entity_id,
             &self.companion,
+            false,
             cx,
             |companion_view, _cx| {
                 self.block_map
@@ -1066,6 +1086,7 @@ impl DisplayMap {
         Self::with_synced_companion_mut(
             self.entity_id,
             &self.companion,
+            false,
             cx,
             |companion_view, _cx| {
                 self.block_map
@@ -1091,6 +1112,7 @@ impl DisplayMap {
         Self::with_synced_companion_mut(
             self.entity_id,
             &self.companion,
+            false,
             cx,
             |companion_view, _cx| {
                 self.block_map
@@ -1537,11 +1559,57 @@ impl DisplaySnapshot {
         self.companion_display_snapshot.as_deref()
     }
 
+    fn align_diff_files(left: &mut Self, right: &mut Self) -> bool {
+        if !right.buffer_snapshot().show_headers() {
+            return false;
+        }
+        let boundaries = left
+            .paired_diff_boundaries(right)
+            .filter_map(|(left, right, block)| block.is_buffer_header().then_some([left, right]))
+            .collect::<Vec<_>>();
+        if boundaries.len() < 2 {
+            return false;
+        }
+
+        let mut offsets = [0, 0];
+        let mut padding = [Vec::new(), Vec::new()];
+        let ends = [
+            left.max_point().row().next_row(),
+            right.max_point().row().next_row(),
+        ];
+        for pair in boundaries.into_iter().chain([ends]) {
+            let adjusted = [pair[0].0 + offsets[0], pair[1].0 + offsets[1]];
+            let boundary = adjusted[0].max(adjusted[1]);
+            for side in 0..2 {
+                let height = boundary - adjusted[side];
+                if height > 0 {
+                    offsets[side] += height;
+                    padding[side].push((BlockRow(pair[side].0), height));
+                }
+            }
+        }
+        let [left_padding, right_padding] = padding;
+        left.block_snapshot.pad_file_boundaries(left_padding);
+        right.block_snapshot.pad_file_boundaries(right_padding);
+        true
+    }
+
+    pub(crate) fn uses_diff_scroll_map(&self) -> bool {
+        self.diff_scroll_map.is_some()
+    }
+
     pub(crate) fn diff_scroll_map(&self) -> Option<(&DiffScrollMap, usize)> {
         let (is_rhs, map) = self.diff_scroll_map.as_ref()?;
         let companion = self.companion_snapshot()?;
-        let sides = if *is_rhs { [companion, self] } else { [self, companion] };
-        Some((map.get_or_init(|| DiffScrollMap::new(sides)), usize::from(*is_rhs)))
+        let sides = if *is_rhs {
+            [companion, self]
+        } else {
+            [self, companion]
+        };
+        Some((
+            map.get_or_init(|| DiffScrollMap::new(sides)),
+            usize::from(*is_rhs),
+        ))
     }
 
     pub(crate) fn diff_hunk_display_rows(&self, hunk: &MultiBufferDiffHunk) -> Range<DisplayRow> {
@@ -1557,6 +1625,58 @@ impl DisplaySnapshot {
             .point_to_display_point(Point::new(last.0, length), Bias::Right)
             .row();
         start..end.next_row()
+    }
+
+    pub(crate) fn paired_diff_hunks<'a>(
+        &'a self,
+        right: &'a Self,
+    ) -> impl Iterator<Item = (Option<MultiBufferDiffHunk>, MultiBufferDiffHunk)> + 'a {
+        let left_buffer = self.buffer_snapshot();
+        let mut left_hunks = HashMap::default();
+        for hunk in left_buffer.diff_hunks() {
+            if let Some(diff) = left_buffer.diff_for_buffer_id(hunk.buffer_id) {
+                // Byte ranges are relative to each file, including the empty range for new files.
+                left_hunks.insert((diff.buffer_id(), hunk.diff_base_byte_range.clone()), hunk);
+            }
+        }
+        right.buffer_snapshot().diff_hunks().map(move |hunk| {
+            let left = left_hunks.remove(&(hunk.buffer_id, hunk.diff_base_byte_range.clone()));
+            (left, hunk)
+        })
+    }
+
+    pub(crate) fn paired_diff_boundaries<'a>(
+        &'a self,
+        right: &'a Self,
+    ) -> impl Iterator<Item = (DisplayRow, DisplayRow, &'a Block)> + 'a {
+        let buffer_id = |block: &Block| match block {
+            Block::BufferHeader { excerpt, .. } | Block::ExcerptBoundary { excerpt, .. } => {
+                Some(excerpt.buffer_id())
+            }
+            Block::FoldedBuffer { first_excerpt, .. } => Some(first_excerpt.buffer_id()),
+            _ => None,
+        };
+        let left_buffer = self.buffer_snapshot();
+        let mut left_rows = HashMap::<_, VecDeque<_>>::default();
+        for (row, block) in self.blocks_in_range(DisplayRow(0)..self.max_point().row().next_row()) {
+            if let Some(id) = buffer_id(block)
+                && let Some(diff) = left_buffer.diff_for_buffer_id(id)
+            {
+                left_rows
+                    .entry((diff.buffer_id(), block.is_buffer_header()))
+                    .or_default()
+                    .push_back(row);
+            }
+        }
+        right
+            .blocks_in_range(DisplayRow(0)..right.max_point().row().next_row())
+            .filter_map(move |(row, block)| {
+                let id = buffer_id(block)?;
+                let left = left_rows
+                    .get_mut(&(id, block.is_buffer_header()))?
+                    .pop_front()?;
+                Some((left, row, block))
+            })
     }
 
     fn diagnostic_severity_is_visible(&self, severity: lsp::DiagnosticSeverity) -> bool {

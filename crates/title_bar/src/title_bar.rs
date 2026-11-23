@@ -277,41 +277,21 @@ impl Render for TitleBar {
 
         let left = h_flex()
             .h_full()
+            .min_w_0()
             .gap_0p5()
             .children(sidebar_switcher)
             .children(self.render_restricted_mode(cx))
             .when(title_bar_settings.show_project_items, |title_bar| {
-                title_bar.children(self.render_project_host(cx))
+                let projects = self.render_project_tabs(project_name, window, cx);
+                title_bar.children(self.render_project_host(cx)).child(
+                    h_flex()
+                        .id("title-bar-project-tabs")
+                        .min_w_0()
+                        .overflow_x_scroll()
+                        .child(h_flex().flex_none().child(projects)),
+                )
             })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-
-        let center = h_flex()
-            .flex_shrink_0()
-            .h_full()
-            .justify_center()
-            .child(
-                div()
-                    .relative()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .when_some(self.render_navigation_buttons(cx), |this, buttons| {
-                        // Anchored outside the project tabs so they stay centered.
-                        this.child(
-                            div()
-                                .absolute()
-                                .right_full()
-                                .h_full()
-                                .flex()
-                                .items_center()
-                                .pr_1()
-                                .child(buttons),
-                        )
-                    })
-                    .when(title_bar_settings.show_project_items, |this| {
-                        this.child(self.render_project_tabs(project_name, window, cx))
-                    }),
-            )
+            .children(self.render_navigation_buttons(cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
         let right = h_flex()
@@ -327,12 +307,13 @@ impl Render for TitleBar {
 
         self.platform_titlebar.update(cx, |this, _| {
             this.set_button_layout(button_layout);
-            this.set_centered_child(center.into_any_element());
             this.set_children([h_flex()
                 .w_full()
                 .h_full()
-                .child(h_flex().flex_1().min_w_0().child(left))
-                .child(h_flex().flex_1().min_w_0().justify_end().child(right))
+                .justify_between()
+                .gap_1()
+                .child(left)
+                .child(right)
                 .into_any_element()]);
         });
         self.platform_titlebar.clone().into_any_element()
@@ -700,6 +681,7 @@ impl TitleBar {
 
         Some(
             h_flex()
+                .flex_none()
                 .child(go_back)
                 .child(go_forward)
                 .into_any_element(),

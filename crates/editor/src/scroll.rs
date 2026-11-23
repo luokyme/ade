@@ -11,7 +11,6 @@ use crate::{
     persistence::EditorDb,
 };
 pub use autoscroll::{Autoscroll, AutoscrollStrategy};
-use collections::HashMap;
 use core::fmt::Debug;
 use gpui::{
     Along, App, AppContext as _, Axis, Context, Entity, EntityId, OngoingScroll, Pixels, Task,
@@ -40,37 +39,25 @@ pub(crate) struct DiffScrollMap {
 
 impl DiffScrollMap {
     pub(crate) fn new([left, right]: [&DisplaySnapshot; 2]) -> Self {
-        let left_hunks: HashMap<_, _> = left
-            .buffer_snapshot()
-            .diff_hunks()
-            .map(|hunk| {
-                (
-                    hunk.diff_base_byte_range.clone(),
-                    left.diff_hunk_display_rows(&hunk),
-                )
-            })
-            .collect();
         let mut rows = Vec::new();
-        for hunk in right.buffer_snapshot().diff_hunks() {
-            if let Some(left_rows) = left_hunks.get(&hunk.diff_base_byte_range) {
+        for (left_hunk, hunk) in left.paired_diff_hunks(right) {
+            if let Some(left_hunk) = left_hunk {
+                let left_rows = left.diff_hunk_display_rows(&left_hunk);
                 let right_rows = right.diff_hunk_display_rows(&hunk);
                 rows.push([left_rows.start.as_f64(), right_rows.start.as_f64()]);
                 rows.push([left_rows.end.as_f64(), right_rows.end.as_f64()]);
             }
         }
-        let folds = |snapshot: &DisplaySnapshot| {
-            snapshot
-                .blocks_in_range(DisplayRow(0)..snapshot.max_point().row().next_row())
-                .filter_map(|(row, block)| {
-                    matches!(block, Block::ExcerptBoundary { .. }).then_some(row.as_f64() + 0.5)
-                })
-                .collect::<Vec<_>>()
-        };
         rows.extend(
-            folds(left)
-                .into_iter()
-                .zip(folds(right))
-                .map(|(left, right)| [left, right]),
+            left.paired_diff_boundaries(right)
+                .map(|(left, right, block)| {
+                    let offset = if matches!(block, Block::ExcerptBoundary { .. }) {
+                        0.5
+                    } else {
+                        0.
+                    };
+                    [left.as_f64() + offset, right.as_f64() + offset]
+                }),
         );
         let row_counts =
             [left, right].map(|snapshot| snapshot.max_point().row().next_row().as_f64());

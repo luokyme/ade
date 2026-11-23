@@ -443,6 +443,11 @@ impl CommitView {
                 window,
                 cx,
             );
+            let editor = if stash.is_none() {
+                editor.with_change_connections()
+            } else {
+                editor
+            };
             editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
 
             editor.rhs_editor().update(cx, |editor, cx| {
@@ -1465,6 +1470,7 @@ impl Item for CommitView {
         let project = self.project.clone();
         let diff_view_style = self.editor.read(cx).diff_view_style();
         let multibuffer = self.multibuffer.clone();
+        let show_change_connections = self.stash.is_none();
         Task::ready(Some(cx.new(|cx| {
             let commit_view = cx.weak_entity();
             let editor = cx.new({
@@ -1481,6 +1487,11 @@ impl Item for CommitView {
                         window,
                         cx,
                     );
+                    let editor = if show_change_connections {
+                        editor.with_change_connections()
+                    } else {
+                        editor
+                    };
                     editor.set_diff_hunk_renderer(Some(Arc::new(HiddenDiffHunkRenderer)), cx);
                     editor.rhs_editor().update(cx, |editor, cx| {
                         editor.set_show_bookmarks(false, cx);

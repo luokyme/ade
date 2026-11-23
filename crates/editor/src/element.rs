@@ -5488,7 +5488,7 @@ impl EditorElement {
                     GitGutterSetting::TrackedFiles
                 )
             });
-        if show_git_gutter {
+        if show_git_gutter && !self.change_connections {
             self.paint_gutter_diff_hunks(layout, self.split_side, window, cx)
         }
 
