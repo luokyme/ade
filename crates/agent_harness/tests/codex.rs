@@ -45,6 +45,7 @@ fn request(prompt: &str) -> RunRequest {
         permission: PermissionMode::FullAccess,
         resume: None,
         fork: None,
+        fork_before: None,
         attachments: Vec::new(),
         skills: Vec::new(),
         auto_compact_tokens: None,
@@ -630,6 +631,53 @@ async fn fork_copies_the_thread_into_a_new_one() {
         )),
         "forked thread expected: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn edit_forks_before_the_selected_turn_even_when_prompts_repeat() {
+    for (source, error) in [
+        ("edit-source", None),
+        ("edit-steered", Some("could not identify the turn")),
+        ("edit-ignored", Some("unexpected history")),
+    ] {
+        let (controls, _steer, _token) = controls("Yes");
+        let mut req = request("scenario:resumed edited");
+        req.fork = Some(source.into());
+        req.fork_before = Some(vec!["same message".into(), "same message".into()]);
+        let events = run_to_end(&harness(), req, controls).await;
+        if let Some(error) = error {
+            assert!(
+                matches!(
+                    events.as_slice(),
+                    [AgentEvent::Done {
+                        status: DoneStatus::Errored,
+                        error: Some(message),
+                        session_id: None,
+                        ..
+                    }] if message.contains(error)
+                ),
+                "{events:?}"
+            );
+        } else {
+            assert!(
+                matches!(
+                    events.first(),
+                    Some(AgentEvent::SessionStarted { session_id, .. }) if session_id == "th-edited"
+                ),
+                "{events:?}"
+            );
+            assert!(
+                matches!(
+                    events.last(),
+                    Some(AgentEvent::Done {
+                        status: DoneStatus::Completed,
+                        ..
+                    })
+                ),
+                "{events:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]

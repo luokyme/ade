@@ -135,6 +135,9 @@ pub struct RunRequest {
     /// Harness-native session id to copy into a new session; ignored when `resume` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork: Option<String>,
+    /// For a Codex fork, the ordered user prompts through the message to exclude.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_before: Option<Vec<String>>,
     /// Absolute image file paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,

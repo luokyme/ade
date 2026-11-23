@@ -5,7 +5,7 @@ use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, Context, DragMoveEvent, Element,
     Entity, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Length,
     ParentElement, PathBuilder, Pixels, StatefulInteractiveElement, Styled, TextStyleRefinement,
-    Window, canvas, div, linear_color_stop, linear_gradient, point, px, size,
+    Window, canvas, div, fill, linear_color_stop, linear_gradient, point, px, size,
 };
 use multi_buffer::{Anchor, ExcerptBoundaryInfo, MultiBufferDiffHunk};
 use smallvec::smallvec;
@@ -307,6 +307,7 @@ fn render_change_connections(
                 })
                 .collect::<HashMap<_, _>>();
             let mut ribbons = Vec::new();
+            let mut insertion_markers = Vec::new();
             let mut controls = Vec::new();
             let fold_spans = |snapshot: &EditorSnapshot, scroll| {
                 snapshot
@@ -336,10 +337,28 @@ fn render_change_connections(
                 let to = span(&right_snapshot, &hunk, right_scroll);
                 let matching_left = left_hunks.get(&hunk.diff_base_byte_range);
                 if let Some((from, _)) = matching_left
+                    && (!from.is_empty() || !to.is_empty())
                     && from.end.max(to.end) >= gap.top()
                     && from.start.min(to.start) <= gap.bottom()
-                    && let Some(path) = change_connection_path(gap, from.clone(), to.clone())
                 {
+                    let mut left_span = from.clone();
+                    let mut right_span = to.clone();
+                    for (endpoint, pane, color) in [
+                        (&mut left_span, left_bounds, colors.created_border),
+                        (&mut right_span, right_bounds, colors.deleted_border),
+                    ] {
+                        if endpoint.is_empty() {
+                            // Give the ribbon and the marker the same pixel-aligned edge.
+                            let top = window.pixel_snap(endpoint.start);
+                            *endpoint = top..top + px(1.);
+                            let marker =
+                                Bounds::new(point(pane.left(), top), size(pane.size.width, px(1.)))
+                                    .intersect(&pane);
+                            if marker.size.height > px(0.) {
+                                insertion_markers.push(fill(marker, color));
+                            }
+                        }
+                    }
                     let color = if hunk.status.is_added() {
                         colors.created_background.into()
                     } else if hunk.status.is_deleted() {
@@ -351,7 +370,9 @@ fn render_change_connections(
                             linear_color_stop(colors.created_background, 1.),
                         )
                     };
-                    ribbons.push((path, color));
+                    if let Some(path) = change_connection_path(gap, left_span, right_span) {
+                        ribbons.push((path, color));
+                    }
                 }
 
                 let endpoints = matching_left
@@ -388,10 +409,13 @@ fn render_change_connections(
                     }
                 });
             }
-            Some((gap, ribbons, controls))
+            Some((gap, ribbons, insertion_markers, controls))
         },
         |_, connections, window, cx| {
-            if let Some((bounds, ribbons, controls)) = connections {
+            if let Some((bounds, ribbons, insertion_markers, controls)) = connections {
+                for marker in insertion_markers {
+                    window.paint_quad(marker);
+                }
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     for (path, color) in ribbons {
                         window.paint_path(path, color);

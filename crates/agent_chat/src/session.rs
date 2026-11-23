@@ -252,6 +252,8 @@ pub struct SessionMetadata {
     /// The parent's agent session, copied by the agent itself on the fork's first run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fork_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fork_before: Option<Vec<String>>,
     #[serde(default)]
     pub outcome: Option<ChatOutcome>,
     #[serde(default)]
@@ -284,6 +286,7 @@ impl SessionMetadata {
             side_chat: false,
             fork_context: None,
             fork_source: None,
+            fork_before: None,
             outcome: None,
             unseen: false,
             project_root: None,
@@ -1630,20 +1633,7 @@ impl AgentSession {
 
     pub fn edit_last_message(&mut self, cx: &mut Context<Self>) -> Option<Prompt> {
         let index = self.editable_message()?;
-        let Some(Entry::User {
-            text,
-            attachments,
-            skills,
-            ..
-        }) = self.transcript.entries.get(index)
-        else {
-            return None;
-        };
-        let prompt = Prompt {
-            text: text.to_string(),
-            attachments: attachments.clone(),
-            skills: skills.clone(),
-        };
+        let prompt = self.message_prompt(index)?;
         self.transcript.truncate(index);
         self.metadata.dropped_prompt = self.editable_prompt.take();
         if self.last_user_index().is_none() && self.metadata.title == title_from(&prompt.text) {
@@ -1653,6 +1643,32 @@ impl AgentSession {
         self.save_entries_soon(cx);
         cx.notify();
         Some(prompt)
+    }
+
+    pub(crate) fn can_edit_message(&self, index: usize) -> bool {
+        !self.deleted
+            && if self.kind() == AgentKind::Codex {
+                matches!(self.entries().get(index), Some(Entry::User { .. }))
+            } else {
+                self.editable_message() == Some(index)
+            }
+    }
+
+    fn message_prompt(&self, index: usize) -> Option<Prompt> {
+        let Entry::User {
+            text,
+            attachments,
+            skills,
+            ..
+        } = self.entries().get(index)?
+        else {
+            return None;
+        };
+        Some(Prompt {
+            text: text.to_string(),
+            attachments: attachments.clone(),
+            skills: skills.clone(),
+        })
     }
 
     fn last_user_index(&self) -> Option<usize> {
@@ -2015,6 +2031,7 @@ impl AgentSession {
             cwd: self.metadata.cwd.to_string_lossy().into_owned(),
             permission: settings.permission,
             resume: self.metadata.native_session_id.clone(),
+            fork_before: self.metadata.fork_before.clone(),
             fork,
             auto_compact_tokens: self.auto_compact_tokens(cx),
             chrome: AgentChatSettings::get_global(cx).claude_in_chrome,
@@ -2163,6 +2180,13 @@ impl AgentSession {
         {
             self.native_fork_errors.clear();
             self.metadata.fork_source = None;
+            if self.metadata.fork_before.take().is_some() && self.metadata.fork_context.is_some() {
+                self.push_notice(
+                    t!("Codex could not fork at this message. The new chat uses the earlier transcript as context.").to_string(),
+                    false,
+                    cx,
+                );
+            }
             self.save_metadata(cx);
             self.working = true;
             self.start_run(prompt, cx);
@@ -2633,6 +2657,7 @@ impl AgentSession {
             self.metadata.native_session_id = Some(session_id);
             if self.native_fork_prompt.take().is_some() {
                 self.metadata.fork_source = None;
+                self.metadata.fork_before = None;
                 self.metadata.fork_context = None;
                 for message in std::mem::take(&mut self.native_fork_errors) {
                     self.push_notice(message, true, cx);
@@ -4138,55 +4163,106 @@ impl AgentStore {
         cx.spawn(async move |this, cx| {
             let parent = opening.await?;
             this.update(cx, |this, cx| {
-                let (parent_metadata, mut entries, parent_working) =
-                    parent.read_with(cx, |parent, cx| {
-                        let mut entries = parent.transcript.serialize(cx);
-                        if parent.is_working()
-                            && let Some(last_user) = entries
-                                .iter()
-                                .rposition(|entry| matches!(entry, SerializedEntry::User { .. }))
-                        {
-                            entries.truncate(last_user);
-                        }
-                        (parent.metadata.clone(), entries, parent.is_working())
-                    });
-                let mut metadata = SessionMetadata::new(
-                    parent_metadata.kind,
-                    parent_metadata.cwd.clone(),
-                    parent_metadata.settings.clone(),
-                );
-                metadata.parent_id = Some(parent_metadata.id.clone());
-                metadata.settings.permission = parent_metadata.settings.permission;
-                metadata.side_chat = side_chat;
-                metadata.project_root = parent_metadata.project_root.clone();
-                metadata.branch = parent_metadata.branch.clone();
-                metadata.fork_context = fork_context(&entries);
-                if !parent_working {
-                    metadata.fork_source = parent_metadata.native_session_id.clone();
+                let parent = parent.read(cx);
+                let mut entries = parent.transcript.serialize(cx);
+                if parent.is_working()
+                    && let Some(last_user) = parent.last_user_index()
+                {
+                    entries.truncate(last_user);
                 }
-                let parent_title = if parent_metadata.title.is_empty() {
-                    NEW_CHAT_TITLE.to_string()
-                } else {
-                    parent_metadata.title.clone()
-                };
-                let template = if side_chat {
-                    entries.clear();
-                    SIDE_CHAT_NOTICE
-                } else {
-                    metadata.title = fork_title(&parent_metadata.title, &this.sessions);
-                    FORKED_NOTICE
-                };
-                let notice = i18n::format(
-                    SharedString::new_static(template),
-                    &[("title", &parent_title)],
-                );
-                entries.push(SerializedEntry::Notice {
-                    text: notice.to_string(),
-                    is_error: false,
-                });
-                Ok(this.insert_session(metadata, SavedTranscript::EntriesOnly(entries), cx))
+                let source = (!parent.is_working())
+                    .then(|| parent.metadata.native_session_id.clone())
+                    .flatten();
+                let metadata = parent.metadata.clone();
+                Ok(this.insert_fork(&metadata, entries, source, None, side_chat, cx))
             })?
         })
+    }
+
+    pub(crate) fn fork_for_edit(
+        &mut self,
+        parent: &Entity<AgentSession>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> Option<(Entity<AgentSession>, Prompt)> {
+        let parent = parent.read(cx);
+        if parent.kind() != AgentKind::Codex || parent.is_deleted() {
+            return None;
+        }
+        let prompt = parent.message_prompt(index)?;
+        let (prefix, target) = parent.entries().split_at(index);
+        let source = match target.first() {
+            Some(Entry::User {
+                undelivered: false, ..
+            }) => parent
+                .metadata
+                .native_session_id
+                .clone()
+                .or_else(|| parent.metadata.fork_source.clone()),
+            _ => None,
+        };
+        let before = source.as_ref().map(|_| {
+            prefix
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::User {
+                        text,
+                        undelivered: false,
+                        ..
+                    } => Some(text.to_string()),
+                    _ => None,
+                })
+                .chain(std::iter::once(prompt.text.clone()))
+                .collect()
+        });
+        let entries = prefix
+            .iter()
+            .map(|entry| serialized_entry(entry, cx))
+            .collect();
+        let metadata = parent.metadata.clone();
+        let fork = self.insert_fork(&metadata, entries, source, before, false, cx);
+        Some((fork, prompt))
+    }
+
+    fn insert_fork(
+        &mut self,
+        parent: &SessionMetadata,
+        mut entries: Vec<SerializedEntry>,
+        source: Option<String>,
+        before: Option<Vec<String>>,
+        side_chat: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<AgentSession> {
+        let mut metadata =
+            SessionMetadata::new(parent.kind, parent.cwd.clone(), parent.settings.clone());
+        metadata.parent_id = Some(parent.id.clone());
+        metadata.side_chat = side_chat;
+        metadata.project_root = parent.project_root.clone();
+        metadata.branch = parent.branch.clone();
+        metadata.fork_context = fork_context(&entries);
+        metadata.fork_source = source;
+        metadata.fork_before = before;
+        let parent_title = if parent.title.is_empty() {
+            NEW_CHAT_TITLE
+        } else {
+            &parent.title
+        };
+        let template = if side_chat {
+            entries.clear();
+            SIDE_CHAT_NOTICE
+        } else {
+            metadata.title = fork_title(&parent.title, &self.sessions);
+            FORKED_NOTICE
+        };
+        let notice = i18n::format(
+            SharedString::new_static(template),
+            &[("title", &parent_title)],
+        );
+        entries.push(SerializedEntry::Notice {
+            text: notice.to_string(),
+            is_error: false,
+        });
+        self.insert_session(metadata, SavedTranscript::EntriesOnly(entries), cx)
     }
 
     fn insert_session(
@@ -4422,13 +4498,14 @@ impl AgentStore {
             SessionEvent::MetadataChanged => {
                 this.keep_loaded_while_needed(&session, cx);
                 let metadata = session.read(cx).metadata.clone();
-                // A native fork copies the parent as it is at the fork's first run, so it must not have moved on.
+                // A fork without a turn boundary copies the parent's latest history.
                 let stale_forks: Vec<String> = this
                     .sessions
                     .iter()
                     .filter(|fork| {
                         fork.parent_id.as_deref() == Some(metadata.id.as_str())
                             && fork.fork_source.is_some()
+                            && fork.fork_before.is_none()
                             && fork.native_session_id.is_none()
                             && metadata.updated_at >= fork.created_at
                     })
@@ -7185,6 +7262,82 @@ done
             assert!(
                 fork.metadata().fork_context.is_some(),
                 "the fork keeps its own history"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn editing_a_codex_message_forks_only_the_earlier_transcript(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let parent = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Codex, directory.path().to_path_buf(), cx)
+        });
+        let attachment = directory.path().join("image.png");
+        let skill = SkillRef {
+            name: "review".into(),
+            path: directory
+                .path()
+                .join("SKILL.md")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        parent.update(cx, |parent, cx| {
+            parent.set_native_session_id("source-thread".into(), cx);
+            parent
+                .transcript
+                .push_user("earlier".into(), Vec::new(), Vec::new());
+            parent.append_text("earlier answer", false, cx);
+            parent.transcript.push_user(
+                "selected $review".into(),
+                vec![attachment.clone()],
+                vec![skill.clone()],
+            );
+            parent.append_text("excluded answer", false, cx);
+            parent
+                .transcript
+                .push_user("later".into(), Vec::new(), Vec::new());
+        });
+
+        let (fork, prompt) = store
+            .update(cx, |store, cx| store.fork_for_edit(&parent, 2, cx))
+            .expect("fork at the selected message");
+        assert_eq!(prompt.text, "selected $review");
+        assert_eq!(prompt.attachments, [attachment]);
+        assert_eq!(prompt.skills, [skill]);
+        parent.update(cx, |parent, cx| {
+            parent.update_metadata(|metadata| metadata.title = "Renamed".into(), cx);
+        });
+        fork.read_with(cx, |fork, cx| {
+            assert_eq!(
+                summarize(&fork.entries()[..2], cx),
+                ["user: earlier", "assistant: earlier answer"]
+            );
+            assert!(matches!(
+                &fork.entries()[2..],
+                [Entry::Notice {
+                    is_error: false,
+                    ..
+                }]
+            ));
+            let metadata = fork.metadata();
+            assert_eq!(metadata.fork_source.as_deref(), Some("source-thread"));
+            assert_eq!(
+                metadata.fork_before.as_deref().expect("fork boundary"),
+                ["earlier", "selected $review"]
+            );
+            assert!(metadata.native_session_id.is_none());
+        });
+        parent.read_with(cx, |parent, cx| {
+            assert_eq!(
+                summarize(parent.entries(), cx),
+                [
+                    "user: earlier",
+                    "assistant: earlier answer",
+                    "user: selected $review",
+                    "assistant: excluded answer",
+                    "user: later",
+                ]
             );
         });
     }

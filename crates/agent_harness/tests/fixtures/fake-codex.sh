@@ -51,7 +51,31 @@ if has "$line" '"method":"model/list"'; then
   emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"gpt-5.6-sol\",\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\",\"description\":\"Reliable agentic workhorse for everyday tasks.\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"},{\"reasoningEffort\":\"ultra\"}],\"additionalSpeedTiers\":[],\"serviceTiers\":[],\"defaultServiceTier\":null,\"isDefault\":false}],\"nextCursor\":null}}"
   exec sleep 30
 fi
-if has "$line" '"method":"thread/resume"'; then
+if has "$line" '"method":"thread/read"' && has "$line" '"threadId":"edit-'; then
+  source=$(field "$line" threadId)
+  has "$line" '"includeTurns":true' || exit 1
+  earlier='{"id":"earlier","items":[{"type":"userMessage","content":[{"type":"text","text":"same message"}]}]}'
+  selected='{"id":"selected","items":[{"type":"userMessage","content":[{"type":"text","text":"same message"}]}]}'
+  later='{"id":"later","items":[{"type":"userMessage","content":[{"type":"text","text":"later message"}]}]}'
+  history="$earlier,$selected,$later"
+  if [ "$source" = edit-steered ]; then
+    history='{"id":"earlier","items":[{"type":"userMessage","text":"same message"},{"type":"userMessage","text":"same message"}]}'
+  fi
+  emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$source\",\"turns\":[$history]}}}"
+  read -r line || exit 0
+  [ "$source" != edit-steered ] || exit 1
+  has "$line" '"method":"thread/fork"' && has "$line" "\"threadId\":\"$source\"" &&
+    has "$line" '"beforeTurnId":"selected"' || exit 1
+  if [ "$source" = edit-ignored ]; then
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-unused\",\"turns\":[$history]}}}"
+    read -r line || exit 1
+    has "$line" '"method":"thread/archive"' && has "$line" '"threadId":"th-unused"' || exit 1
+    emit "{\"id\":$(rid "$line"),\"result\":{}}"
+    read -r line && exit 1
+    exit 0
+  fi
+  emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-edited\",\"turns\":[$earlier]}}}"
+elif has "$line" '"method":"thread/resume"'; then
   if has "$line" '"threadId":"resume-with-child-v1"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"items\":[{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-alpha\",\"tool\":\"spawnAgent\",\"status\":\"completed\",\"receiverThreadIds\":[\"child-alpha\"]}]}]}}}"
   elif has "$line" '"threadId":"resume-with-child-v2"'; then
@@ -488,6 +512,9 @@ case "$turnline" in
   ;;
 
 *scenario:resumed*)
+  if has "$thread_line" '"threadId":"edit-source"'; then
+    has "$turnline" '"threadId":"th-edited"' && has "$turnline" 'scenario:resumed edited' || exit 1
+  fi
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'

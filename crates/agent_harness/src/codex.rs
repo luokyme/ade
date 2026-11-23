@@ -925,6 +925,81 @@ fn turn_request(client: &RpcClient, params: Value) -> Result<Reply, HarnessError
     Ok(client.request_now(method, params))
 }
 
+fn fork_turn<'a>(turns: &'a [Value], prompts: &[String]) -> Option<(usize, &'a str)> {
+    let mut prompts = prompts.iter().peekable();
+    for (turn_index, turn) in turns.iter().enumerate() {
+        let messages = turn["items"]
+            .as_array()?
+            .iter()
+            .filter(|item| matches!(item_type(item), "userMessage" | "user_message"));
+        for (message_index, message) in messages.enumerate() {
+            let expected = prompts.next()?;
+            let text = normalize::user_message_text(message).unwrap_or_default();
+            if text != *expected && !(text.is_empty() && expected.trim().is_empty()) {
+                return None;
+            }
+            if prompts.peek().is_none() {
+                // A steered message can share a turn with an earlier prompt.
+                if message_index != 0 {
+                    return None;
+                }
+                return Some((turn_index, turn["id"].as_str()?));
+            }
+        }
+    }
+    None
+}
+
+async fn fork_before_message(
+    client: &RpcClient,
+    source: &str,
+    mut params: serde_json::Map<String, Value>,
+    prompts: &[String],
+) -> Result<Value, HarnessError> {
+    let read = client
+        .request(
+            "thread/read",
+            json!({ "threadId": source, "includeTurns": true }),
+        )
+        .await?;
+    let source_turns = read["thread"]["turns"].as_array();
+    let Some((prefix, before)) = source_turns.and_then(|turns| {
+        let (index, before) = fork_turn(turns, prompts)?;
+        Some((&turns[..index], before))
+    }) else {
+        return Err(HarnessError::Protocol(
+            "Codex could not identify the turn to fork before".into(),
+        ));
+    };
+    params.insert("beforeTurnId".into(), before.into());
+    let fork = client.request("thread/fork", Value::Object(params)).await?;
+    let new_id = fork["thread"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && *id != source);
+
+    // Older servers can ignore beforeTurnId and return an unbounded copy.
+    if new_id.is_some()
+        && fork["thread"]["turns"].as_array().is_some_and(|turns| {
+            turns
+                .iter()
+                .map(|turn| &turn["id"])
+                .eq(prefix.iter().map(|turn| &turn["id"]))
+        })
+    {
+        return Ok(fork);
+    }
+    if let Some(thread_id) = new_id
+        && let Err(error) = client
+            .request("thread/archive", json!({ "threadId": thread_id }))
+            .await
+    {
+        tracing::warn!(%error, "Could not archive the unused Codex fork");
+    }
+    Err(HarnessError::Protocol(
+        "Codex returned a fork with unexpected history".into(),
+    ))
+}
+
 /// Returns false when the session loop should end.
 async fn begin_steered_turn(
     client: &RpcClient,
@@ -1165,7 +1240,11 @@ async fn run_session(session: Session) {
         } else if let Some(fork) = &request.fork {
             let mut p = start_params.clone();
             p.insert("threadId".into(), Value::String(fork.clone()));
-            client.request("thread/fork", Value::Object(p)).await?
+            if let Some(prompts) = &request.fork_before {
+                fork_before_message(&client, fork, p, prompts).await?
+            } else {
+                client.request("thread/fork", Value::Object(p)).await?
+            }
         } else {
             client
                 .request("thread/start", Value::Object(start_params.clone()))

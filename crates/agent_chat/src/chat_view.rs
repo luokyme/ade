@@ -1634,7 +1634,7 @@ impl ChatView {
         at: i64,
         copy: Option<(SharedString, CopySource)>,
         save: Option<SaveTarget>,
-        editable: bool,
+        edit_index: Option<usize>,
         align_end: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
@@ -1663,10 +1663,15 @@ impl ChatView {
                                 .child(timestamp),
                         )
                     })
-                    .when(editable, |this| {
+                    .when_some(edit_index, |this, index| {
+                        let tooltip = if self.session.read(cx).kind() == crate::AgentKind::Codex {
+                            t!("Edit message in a new chat")
+                        } else {
+                            t!("Edit message")
+                        };
                         this.child(
                             div()
-                                .id("edit-last-message")
+                                .id(("edit-message", index))
                                 .size(px(SPACE_MD * 2.))
                                 .flex()
                                 .items_center()
@@ -1674,11 +1679,11 @@ impl ChatView {
                                 .rounded(px(6.))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(ink(0.08, cx)))
-                                .tooltip(Tooltip::text(t!("Edit message")))
+                                .tooltip(Tooltip::text(tooltip))
                                 .child(icon(IconName::AgentPen, 14.).text_color(muted))
-                                .on_click(cx.listener(|this, _, window, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    this.edit_last_message(window, cx)
+                                    this.edit_message(index, window, cx)
                                 })),
                         )
                     })
@@ -1826,8 +1831,8 @@ impl ChatView {
         };
         let text = text.clone();
         let attachments = attachments.clone();
-        let editable =
-            self.subagent.is_none() && self.session.read(cx).editable_message() == Some(index);
+        let edit_index = (self.subagent.is_none() && self.session.read(cx).can_edit_message(index))
+            .then_some(index);
         let line_count = text.lines().count();
         let collapsible =
             line_count > USER_COLLAPSED_LINES || text.chars().count() > USER_COLLAPSE_CHARS;
@@ -1969,7 +1974,7 @@ impl ChatView {
                 *at,
                 copy,
                 save,
-                editable,
+                edit_index,
                 true,
                 cx,
             ))
@@ -2251,7 +2256,7 @@ impl ChatView {
             last_at,
             copy,
             save,
-            false,
+            None,
             false,
             cx,
         )

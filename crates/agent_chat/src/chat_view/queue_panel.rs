@@ -14,6 +14,7 @@ use gpui::{
 };
 use i18n::t;
 use ui::{IconName, Tooltip, prelude::*};
+use util::ResultExt as _;
 
 const ROW_HEIGHT: f32 = 36.;
 const ROW_PAD_X: f32 = 8.;
@@ -116,6 +117,43 @@ impl ChatView {
     fn restore_draft(&mut self, draft: Prompt, window: &mut Window, cx: &mut Context<Self>) {
         self.set_composer_prompt(draft, window, cx);
         cx.notify();
+    }
+
+    pub(super) fn edit_message(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session.read(cx).can_edit_message(index) {
+            return;
+        }
+        if self.session.read(cx).kind() != crate::AgentKind::Codex {
+            self.edit_last_message(window, cx);
+            return;
+        }
+        let workspace = self.workspace.clone();
+        let parent = self.session.clone();
+        let store = self.store.clone();
+        window.defer(cx, move |window, cx| {
+            workspace
+                .update(cx, |workspace, cx| {
+                    let Some((fork, prompt)) =
+                        store.update(cx, |store, cx| store.fork_for_edit(&parent, index, cx))
+                    else {
+                        return;
+                    };
+                    crate::agent_panel::open_chat(workspace, fork.clone(), window, cx);
+                    if let Some(view) = crate::agent_panel::chat_view_for(workspace, &fork, cx) {
+                        view.update(cx, |view, cx| {
+                            view.set_composer_prompt(prompt, window, cx);
+                            window.focus(&view.composer.focus_handle(cx), cx);
+                            cx.notify();
+                        });
+                    }
+                })
+                .log_err();
+        });
     }
 
     pub(super) fn edit_last_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {

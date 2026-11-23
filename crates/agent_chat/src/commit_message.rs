@@ -123,6 +123,7 @@ async fn run_once(
         permission,
         resume: None,
         fork: None,
+        fork_before: None,
         attachments: Vec::new(),
         skills: Vec::new(),
         auto_compact_tokens: None,

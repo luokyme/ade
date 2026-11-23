@@ -70,6 +70,7 @@ fn request(prompt: &str) -> RunRequest {
         permission: PermissionMode::Ask,
         resume: None,
         fork: None,
+        fork_before: None,
         attachments: Vec::new(),
         skills: Vec::new(),
         auto_compact_tokens: None,
