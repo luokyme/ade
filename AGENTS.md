@@ -30,7 +30,7 @@
 
 | 决策文件路径 | 编号前缀 | 涵盖范围 |
 | --- | --- | --- |
-| [decisions/title-bar.md](decisions/title-bar.md) | TITLEBAR | 标题栏与侧栏入口、最近的项目和导航位置、状态栏位置与诊断入口、编辑区标签样式 |
+| [decisions/title-bar.md](decisions/title-bar.md) | TITLEBAR | 标题栏与侧栏入口、最近的项目和导航位置、状态栏位置与诊断入口、文件标签位置与样式 |
 | [decisions/product-name.md](decisions/product-name.md) | PRODUCT | 产品名称 Ade：crate、动作命名空间、URL scheme、环境变量与目录的统一命名；应用名称和桌面标识不加 Dev 后缀 |
 | [decisions/git-commit-messages.md](decisions/git-commit-messages.md) | COMMIT | Git 面板默认生成中文 Conventional Commits 提交消息 |
 | [decisions/git-panel.md](decisions/git-panel.md) | GITUI | Git 面板分区、历史记录、工作区与历史差异页 |

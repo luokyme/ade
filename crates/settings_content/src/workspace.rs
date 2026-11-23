@@ -528,7 +528,7 @@ pub enum RestoreOnStartupBehavior {
 #[with_fallible_options]
 #[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq)]
 pub struct TabBarSettingsContent {
-    /// Whether or not to show the tab bar in the editor.
+    /// Whether or not to show the editor's file tabs in the window title bar.
     ///
     /// Default: true
     pub show: Option<bool>,
@@ -540,8 +540,8 @@ pub struct TabBarSettingsContent {
     ///
     /// Default: true
     pub show_tab_bar_buttons: Option<bool>,
-    /// Whether or not to show pinned tabs in a separate row.
-    /// When enabled, pinned tabs appear in a top row and unpinned tabs in a bottom row.
+    /// Whether or not to show pinned tabs in a separate row in pane tab bars.
+    /// In the window title bar, pinned and unpinned tabs share a single row.
     ///
     /// Default: false
     pub show_pinned_tabs_in_separate_row: Option<bool>,

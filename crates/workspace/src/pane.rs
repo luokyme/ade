@@ -436,6 +436,7 @@ pub struct Pane {
     use_max_tabs: bool,
     _subscriptions: Vec<Subscription>,
     tab_bar_scroll_handle: ScrollHandle,
+    title_bar_tabs_scroll_handle: ScrollHandle,
     /// This is set to true if a user scroll has occurred more recently than a system scroll
     /// We want to suppress certain system scrolls when the user has intentionally scrolled
     suppress_scroll: bool,
@@ -596,6 +597,7 @@ impl Pane {
             }))),
             toolbar: cx.new(|_| Toolbar::new()),
             tab_bar_scroll_handle: ScrollHandle::new(),
+            title_bar_tabs_scroll_handle: ScrollHandle::new(),
             suppress_scroll: false,
             drag_split_direction: None,
             workspace,
@@ -1503,6 +1505,7 @@ impl Pane {
     }
 
     fn update_active_tab(&mut self, index: usize) {
+        self.title_bar_tabs_scroll_handle.scroll_to_item(index);
         if !self.is_tab_pinned(index) {
             self.suppress_scroll = false;
             self.tab_bar_scroll_handle
@@ -3527,9 +3530,54 @@ impl Pane {
             return gpui::Empty.into_any();
         }
 
+        let mut tab_items = self.render_tab_items(window, cx);
+        let tab_count = tab_items.len();
+        let unpinned_tabs = tab_items.split_off(self.pinned_tab_count);
+        let pinned_tabs = tab_items;
+
+        let use_separate_rows = TabBarSettings::get_global(cx).show_pinned_tabs_in_separate_row;
+
+        if use_separate_rows && !pinned_tabs.is_empty() && !unpinned_tabs.is_empty() {
+            self.render_two_row_tab_bar(pinned_tabs, unpinned_tabs, tab_count, window, cx)
+        } else {
+            self.render_single_row_tab_bar(pinned_tabs, unpinned_tabs, tab_count, window, cx)
+        }
+    }
+
+    pub fn render_title_bar_tabs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.in_center_group
+            || self.items.is_empty()
+            || !(self.should_display_tab_bar.clone())(window, cx)
+        {
+            return None;
+        }
+
+        let tabs = self.render_tab_items(window, cx);
+        let tab_count = tabs.len();
+        let trailing_button = (self.render_trailing_tab_button.clone())(self, window, cx);
+        let (start_buttons, end_buttons) = self.tab_bar_buttons(window, cx);
+        Some(
+            h_flex()
+                .id(("title-bar-pane-tabs", cx.entity_id()))
+                .min_w_0()
+                .gap_1()
+                .children(start_buttons)
+                .child(self.render_scrollable_tabs(tabs, trailing_button, tab_count, true, cx))
+                .children(end_buttons)
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .into_any_element(),
+        )
+    }
+
+    fn render_tab_items(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let focus_handle = self.focus_handle.clone();
 
-        let mut tab_items = self
+        let tab_items = self
             .items
             .iter()
             .enumerate()
@@ -3550,49 +3598,19 @@ impl Pane {
             );
             self.pinned_tab_count = tab_count;
         }
-        let unpinned_tabs = tab_items.split_off(self.pinned_tab_count);
-        let pinned_tabs = tab_items;
-
-        let tab_bar_settings = TabBarSettings::get_global(cx);
-        let use_separate_rows = tab_bar_settings.show_pinned_tabs_in_separate_row;
-
-        if use_separate_rows && !pinned_tabs.is_empty() && !unpinned_tabs.is_empty() {
-            self.render_two_row_tab_bar(
-                pinned_tabs,
-                unpinned_tabs,
-                tab_count,
-                window,
-                cx,
-            )
-        } else {
-            self.render_single_row_tab_bar(
-                pinned_tabs,
-                unpinned_tabs,
-                tab_count,
-                window,
-                cx,
-            )
-        }
+        tab_items
     }
 
-    fn configure_tab_bar_start(
+    fn tab_bar_buttons(
         &mut self,
-        tab_bar: TabBar,
         window: &mut Window,
         cx: &mut Context<Pane>,
-    ) -> TabBar {
-        tab_bar
-            .map(|tab_bar| {
-                if self.show_tab_bar_buttons {
-                    let render_tab_buttons = self.render_tab_bar_buttons.clone();
-                    let (left_children, right_children) = render_tab_buttons(self, window, cx);
-                    tab_bar
-                        .start_children(left_children)
-                        .end_children(right_children)
-                } else {
-                    tab_bar
-                }
-            })
+    ) -> (Option<AnyElement>, Option<AnyElement>) {
+        if self.show_tab_bar_buttons {
+            (self.render_tab_bar_buttons.clone())(self, window, cx)
+        } else {
+            (None, None)
+        }
     }
 
     fn render_single_row_tab_bar(
@@ -3605,12 +3623,10 @@ impl Pane {
     ) -> AnyElement {
         let render_trailing_tab_button = self.render_trailing_tab_button.clone();
         let trailing_button = render_trailing_tab_button(self, window, cx);
-        let tab_bar = self
-            .configure_tab_bar_start(
-                TabBar::new("tab_bar"),
-                window,
-                cx,
-            )
+        let (start_buttons, end_buttons) = self.tab_bar_buttons(window, cx);
+        let tab_bar = TabBar::new("tab_bar")
+            .start_children(start_buttons)
+            .end_children(end_buttons)
             .children(pinned_tabs.len().ne(&0).then(|| {
                 let max_scroll = self.tab_bar_scroll_handle.max_offset().x;
                 // We need to check both because offset returns delta values even when the scroll handle is not scrollable
@@ -3629,10 +3645,11 @@ impl Pane {
                             .border_color(cx.theme().colors().border)
                     })
             }))
-            .child(self.render_unpinned_tabs_container(
+            .child(self.render_scrollable_tabs(
                 unpinned_tabs,
                 trailing_button,
                 tab_count,
+                false,
                 cx,
             ));
         tab_bar.into_any_element()
@@ -3648,12 +3665,10 @@ impl Pane {
     ) -> AnyElement {
         let render_trailing_tab_button = self.render_trailing_tab_button.clone();
         let trailing_button = render_trailing_tab_button(self, window, cx);
-        let pinned_tab_bar = self
-            .configure_tab_bar_start(
-                TabBar::new("pinned_tab_bar"),
-                window,
-                cx,
-            )
+        let (start_buttons, end_buttons) = self.tab_bar_buttons(window, cx);
+        let pinned_tab_bar = TabBar::new("pinned_tab_bar")
+            .start_children(start_buttons)
+            .end_children(end_buttons)
             .child(
                 h_flex()
                     .id("pinned_tabs_row")
@@ -3670,34 +3685,42 @@ impl Pane {
             .flex_none()
             .child(pinned_tab_bar)
             .child(
-                TabBar::new("unpinned_tab_bar").child(self.render_unpinned_tabs_container(
+                TabBar::new("unpinned_tab_bar").child(self.render_scrollable_tabs(
                     unpinned_tabs,
                     trailing_button,
                     tab_count,
+                    false,
                     cx,
                 )),
             )
             .into_any_element()
     }
 
-    fn render_unpinned_tabs_container(
-        &mut self,
-        unpinned_tabs: Vec<AnyElement>,
+    fn render_scrollable_tabs(
+        &self,
+        tabs: Vec<AnyElement>,
         trailing_button: Option<AnyElement>,
         tab_count: usize,
+        in_title_bar: bool,
         cx: &mut Context<Pane>,
     ) -> impl IntoElement {
+        let (id, scroll_handle) = if in_title_bar {
+            ("file tabs", &self.title_bar_tabs_scroll_handle)
+        } else {
+            ("unpinned tabs", &self.tab_bar_scroll_handle)
+        };
         h_flex()
-            .id("unpinned tabs")
+            .id(id)
             .overflow_x_scroll()
-            .w_full()
+            .when(in_title_bar, |tabs| tabs.min_w_0())
+            .when(!in_title_bar, |tabs| tabs.w_full())
             .gap_1()
             .px_1()
-            .track_scroll(&self.tab_bar_scroll_handle)
+            .track_scroll(scroll_handle)
             .on_scroll_wheel(cx.listener(|this, _, _, _| {
                 this.suppress_scroll = true;
             }))
-            .children(unpinned_tabs)
+            .children(tabs)
             .children(trailing_button.map(|button| {
                 h_flex()
                     .h(Tab::container_height(cx))
@@ -4434,8 +4457,13 @@ impl Render for Pane {
             .read(cx)
             .contribute_context(&mut key_context, cx);
 
-        let should_display_tab_bar = self.should_display_tab_bar.clone();
-        let display_tab_bar = should_display_tab_bar(window, cx);
+        let tabs_in_title_bar = self.in_center_group
+            && self
+                .workspace
+                .upgrade()
+                .is_some_and(|workspace| workspace.read(cx).pane_tabs_in_title_bar());
+        let display_tab_bar =
+            !tabs_in_title_bar && (self.should_display_tab_bar.clone())(window, cx);
         let Some(project) = self.project.upgrade() else {
             return div().track_focus(&self.focus_handle(cx));
         };

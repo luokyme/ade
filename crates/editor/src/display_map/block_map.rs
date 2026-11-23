@@ -2230,6 +2230,7 @@ impl BlockSnapshot {
             );
         }
         padded.append(cursor.suffix(), ());
+        drop(cursor);
         self.transforms = padded;
     }
 

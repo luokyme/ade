@@ -5,7 +5,7 @@ use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, Context, DragMoveEvent, Element,
     Entity, GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Length,
     ParentElement, PathBuilder, Pixels, StatefulInteractiveElement, Styled, TextStyleRefinement,
-    Window, canvas, div, fill, linear_color_stop, linear_gradient, point, px, size,
+    Window, canvas, div, linear_color_stop, linear_gradient, point, px, size,
 };
 use multi_buffer::{Anchor, ExcerptBoundaryInfo, MultiBufferDiffHunk};
 use smallvec::smallvec;
@@ -309,7 +309,6 @@ fn render_change_connections(
                 position(scroll, rows.start)..position(scroll, rows.end)
             };
             let mut ribbons = Vec::new();
-            let mut insertion_markers = Vec::new();
             let mut controls = Vec::new();
             let fold_color = cx.theme().colors().border_variant;
             for (left_row, right_row, block) in
@@ -324,7 +323,7 @@ fn render_change_connections(
                 let to = right_top..right_top + px(1.);
                 if from.end.max(to.end) >= gap.top()
                     && from.start.min(to.start) <= gap.bottom()
-                    && let Some(path) = change_connection_path(gap, from, to)
+                    && let Some(path) = change_connection_path(gap, start_x..end_x, from, to)
                 {
                     ribbons.push((path, fold_color.into()));
                 }
@@ -341,34 +340,29 @@ fn render_change_connections(
                 {
                     let mut left_span = from.clone();
                     let mut right_span = to.clone();
-                    for (endpoint, pane, color) in [
-                        (&mut left_span, left_bounds, colors.created_border),
-                        (&mut right_span, right_bounds, colors.deleted_border),
-                    ] {
-                        if endpoint.is_empty() {
-                            // Give the ribbon and the marker the same pixel-aligned edge.
-                            let top = window.pixel_snap(endpoint.start);
-                            *endpoint = top..top + px(1.);
-                            let marker =
-                                Bounds::new(point(pane.left(), top), size(pane.size.width, px(1.)))
-                                    .intersect(&pane);
-                            if marker.size.height > px(0.) {
-                                insertion_markers.push(fill(marker, color));
-                            }
-                        }
-                    }
-                    let color = if hunk.status.is_added() {
-                        colors.created_background.into()
-                    } else if hunk.status.is_deleted() {
-                        colors.deleted_background.into()
+                    let (left_edge, left_color) = if left_span.is_empty() {
+                        let top = window.pixel_snap(left_span.start);
+                        left_span = top..top + px(1.);
+                        (left_bounds.left(), colors.created_border)
                     } else {
-                        linear_gradient(
-                            90.,
-                            linear_color_stop(colors.deleted_background, 0.),
-                            linear_color_stop(colors.created_background, 1.),
-                        )
+                        (start_x, colors.deleted_background)
                     };
-                    if let Some(path) = change_connection_path(gap, left_span, right_span) {
+                    let (right_edge, right_color) = if right_span.is_empty() {
+                        let top = window.pixel_snap(right_span.start);
+                        right_span = top..top + px(1.);
+                        (right_bounds.right(), colors.deleted_border)
+                    } else {
+                        (end_x, colors.created_background)
+                    };
+                    if let Some(path) =
+                        change_connection_path(gap, left_edge..right_edge, left_span, right_span)
+                    {
+                        let width = right_edge - left_edge;
+                        let color = linear_gradient(
+                            90.,
+                            linear_color_stop(left_color, (start_x - left_edge) / width),
+                            linear_color_stop(right_color, (end_x - left_edge) / width),
+                        );
                         ribbons.push((path, color));
                     }
                 }
@@ -407,17 +401,16 @@ fn render_change_connections(
                     }
                 });
             }
-            Some((gap, ribbons, insertion_markers, controls))
+            Some((gap, ribbons, controls))
         },
-        |_, connections, window, cx| {
-            if let Some((bounds, ribbons, insertion_markers, controls)) = connections {
-                for marker in insertion_markers {
-                    window.paint_quad(marker);
-                }
+        |bounds, connections, window, cx| {
+            if let Some((gap, ribbons, controls)) = connections {
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
                     for (path, color) in ribbons {
                         window.paint_path(path, color);
                     }
+                });
+                window.with_content_mask(Some(ContentMask { bounds: gap }), |window| {
                     for mut control in controls {
                         control.paint(window, cx);
                     }
@@ -432,6 +425,7 @@ fn render_change_connections(
 
 fn change_connection_path(
     gap: Bounds<Pixels>,
+    extent: Range<Pixels>,
     left: Range<Pixels>,
     right: Range<Pixels>,
 ) -> Option<gpui::Path<Pixels>> {
@@ -442,18 +436,28 @@ fn change_connection_path(
     let end = gap.right();
     let bend = (end - start) * 0.53;
     let mut outline = PathBuilder::fill();
-    outline.move_to(point(start, left.start));
+    outline.move_to(point(extent.start, left.start));
+    if extent.start < start {
+        outline.line_to(point(start, left.start));
+    }
     outline.cubic_bezier_to(
         point(end, right.start),
         point(start + bend, left.start),
         point(end - bend, right.start),
     );
+    if extent.end > end {
+        outline.line_to(point(extent.end, right.start));
+        outline.line_to(point(extent.end, right.end));
+    }
     outline.line_to(point(end, right.end));
     outline.cubic_bezier_to(
         point(start, left.end),
         point(end - bend, right.end),
         point(start + bend, left.end),
     );
+    if extent.start < start {
+        outline.line_to(point(extent.start, left.end));
+    }
     outline.close();
     outline.build().ok()
 }
