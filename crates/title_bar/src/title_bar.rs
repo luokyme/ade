@@ -24,7 +24,7 @@ use ui::{ButtonLike, IconWithIndicator, Indicator, PopoverMenu, TintColor, Toolt
 use update_version::UpdateVersion;
 use util::ResultExt;
 use workspace::{
-    AgentActivity, GoBack, GoForward, MultiWorkspace, Pane, ProjectGroupKey, TabBarSettings,
+    AgentActivity, GoBack, GoForward, MultiWorkspace, ProjectGroupKey, TabBarSettings,
     ToggleWorktreeSecurity, Workspace,
 };
 
@@ -221,22 +221,6 @@ impl Render for TitleBar {
 
         let title_bar_settings = *TitleBarSettings::get_global(cx);
         let button_layout = title_bar_settings.button_layout;
-        let active_pane = self
-            .workspace
-            .upgrade()
-            .map(|workspace| workspace.read(cx).active_pane().clone());
-        if let Some(pane) = &active_pane
-            && self
-                .observed_pane
-                .as_ref()
-                .is_none_or(|(pane_id, _)| *pane_id != pane.entity_id())
-        {
-            let subscription = cx.observe(pane, |_, _, cx| cx.notify());
-            self.observed_pane = Some((pane.entity_id(), subscription));
-        }
-        let file_tabs = active_pane
-            .as_ref()
-            .and_then(|pane| pane.update(cx, |pane, cx| pane.render_title_bar_tabs(window, cx)));
         let status_bar = self.workspace.upgrade().and_then(|workspace| {
             let workspace = workspace.read(cx);
             (workspace.status_bar_visible(cx) && workspace.status_bar_in_title_bar(cx))
@@ -293,24 +277,40 @@ impl Render for TitleBar {
 
         let left = h_flex()
             .h_full()
-            .min_w_0()
             .gap_2()
             .children(sidebar_switcher)
             .children(self.render_restricted_mode(cx))
             .when(title_bar_settings.show_project_items, |title_bar| {
-                let projects = self.render_project_tabs(project_name, window, cx);
-                title_bar.children(self.render_project_host(cx)).child(
-                    h_flex()
-                        .id("title-bar-project-tabs")
-                        .min_w_0()
-                        .overflow_x_scroll()
-                        .child(h_flex().flex_none().child(projects)),
-                )
+                title_bar.children(self.render_project_host(cx))
             })
-            .children(
-                active_pane
-                    .as_ref()
-                    .and_then(|pane| self.render_navigation_buttons(pane, cx)),
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+
+        let center = h_flex()
+            .flex_shrink_0()
+            .h_full()
+            .justify_center()
+            .child(
+                div()
+                    .relative()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .when_some(self.render_navigation_buttons(cx), |this, buttons| {
+                        // Anchored outside the project tabs so they stay centered.
+                        this.child(
+                            div()
+                                .absolute()
+                                .right_full()
+                                .h_full()
+                                .flex()
+                                .items_center()
+                                .pr_1()
+                                .child(buttons),
+                        )
+                    })
+                    .when(title_bar_settings.show_project_items, |this| {
+                        this.child(self.render_project_tabs(project_name, window, cx))
+                    }),
             )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
 
@@ -327,14 +327,12 @@ impl Render for TitleBar {
 
         self.platform_titlebar.update(cx, |this, _| {
             this.set_button_layout(button_layout);
+            this.set_centered_child(center.into_any_element());
             this.set_children([h_flex()
                 .w_full()
                 .h_full()
-                .justify_between()
-                .gap_1()
-                .child(left)
-                .children(file_tabs.map(|tabs| h_flex().flex_1().min_w(rems(8.)).child(tabs)))
-                .child(right)
+                .child(h_flex().flex_1().min_w_0().child(left))
+                .child(h_flex().flex_1().min_w_0().justify_end().child(right))
                 .into_any_element()]);
         });
         self.platform_titlebar.clone().into_any_element()
@@ -635,11 +633,21 @@ impl TitleBar {
         }
     }
 
-    fn render_navigation_buttons(&self, pane: &Entity<Pane>, cx: &App) -> Option<AnyElement> {
+    fn render_navigation_buttons(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !TabBarSettings::get_global(cx).show_nav_history_buttons {
             return None;
         }
         let workspace = self.workspace.upgrade()?;
+        let pane = workspace.read(cx).active_pane().clone();
+
+        if self
+            .observed_pane
+            .as_ref()
+            .is_none_or(|(pane_id, _)| *pane_id != pane.entity_id())
+        {
+            let subscription = cx.observe(&pane, |_, _, cx| cx.notify());
+            self.observed_pane = Some((pane.entity_id(), subscription));
+        }
 
         let (can_go_back, can_go_forward) = {
             let pane = pane.read(cx);
@@ -692,7 +700,6 @@ impl TitleBar {
 
         Some(
             h_flex()
-                .flex_none()
                 .child(go_back)
                 .child(go_forward)
                 .into_any_element(),

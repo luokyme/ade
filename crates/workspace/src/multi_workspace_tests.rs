@@ -1449,9 +1449,27 @@ async fn test_closing_active_project_switches_to_kept_project(cx: &mut TestAppCo
         assert!(mw.is_workspace_retained(&workspace_b));
     });
 
+    let dirty_item = cx.new(|cx| TestItem::new(cx).with_dirty(true));
+    workspace_b.update_in(cx, |workspace, window, cx| {
+        workspace.add_item_to_active_pane(Box::new(dirty_item), None, true, window, cx);
+    });
+    let cancelled = multi_workspace.update_in(cx, |mw, window, cx| {
+        mw.remove_project_group(&key_b, window, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Cancel");
+    cx.run_until_parked();
+    assert!(!cancelled.await.unwrap());
+    multi_workspace.read_with(cx, |mw, _| {
+        assert_eq!(mw.workspace(), &workspace_b);
+        assert!(mw.project_group_keys().contains(&key_b));
+    });
+
     let removed = multi_workspace.update_in(cx, |mw, window, cx| {
         mw.remove_project_group(&key_b, window, cx)
     });
+    cx.run_until_parked();
+    cx.simulate_prompt_answer("Don't Save");
     cx.run_until_parked();
     assert!(removed.await.unwrap());
 

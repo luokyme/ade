@@ -38,6 +38,7 @@ pub use remote_servers::RemoteServerProjects;
 use settings::{DefaultOpenBehavior, Settings, WorktreeId};
 use workspace::ProjectGroupKey;
 
+use ade_actions::{OpenRecent, OpenRemote};
 use ui::{
     ButtonLike, ContextMenu, Divider, HighlightedLabel, Indicator, KeyBinding, ListItem,
     ListItemSpacing, ListSubHeader, PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
@@ -48,7 +49,6 @@ use workspace::{
     RecentWorkspace, SerializedWorkspaceLocation, Workspace, WorkspaceDb, WorkspaceId,
     notifications::DetachAndPromptErr, with_active_or_new_workspace,
 };
-use ade_actions::{OpenRecent, OpenRemote};
 
 actions!(
     recent_projects,
@@ -735,9 +735,7 @@ impl RecentProjects {
                         .get(hit.candidate_id)
                         .cloned()
                     {
-                        picker.delegate.remove_project_group(key, window, cx);
-                        let query = picker.query(cx);
-                        picker.update_matches(query, window, cx);
+                        RecentProjectsDelegate::close_project_group(key, window, cx);
                     }
                 }
                 Some(ProjectPickerEntry::RecentProject(_)) => {
@@ -1300,6 +1298,9 @@ impl PickerDelegate for RecentProjectsDelegate {
                                         )
                                     }
                                 })
+                                .when(self.style == ProjectPickerStyle::Popover, |button| {
+                                    button.visible_on_hover("list_item")
+                                })
                                 .on_click({
                                     let project_group_key = project_group_key.clone();
                                     cx.listener(move |_picker, _, window, cx| {
@@ -1316,13 +1317,13 @@ impl PickerDelegate for RecentProjectsDelegate {
                         )
                     })
                     .child(
-                        IconButton::new("remove_open_project", IconName::Close)
+                        IconButton::new("close_open_project", IconName::Close)
                             .icon_size(IconSize::Small)
                             .tooltip({
                                 let focus_handle = self.focus_handle.clone();
                                 move |_, cx| {
                                     Tooltip::for_action_in(
-                                        t!("Remove Project from Window"),
+                                        t!("Close Project"),
                                         &RemoveSelected,
                                         &focus_handle,
                                         cx,
@@ -1330,16 +1331,14 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 }
                             })
                             .on_click({
-                                cx.listener(move |picker, _, window, cx| {
+                                cx.listener(move |_picker, _, window, cx| {
                                     cx.stop_propagation();
                                     window.prevent_default();
-                                    picker.delegate.remove_project_group(
+                                    Self::close_project_group(
                                         project_group_key.clone(),
                                         window,
                                         cx,
                                     );
-                                    let query = picker.query(cx);
-                                    picker.update_matches(query, window, cx);
                                 })
                             }),
                     )
@@ -1376,7 +1375,9 @@ impl PickerDelegate for RecentProjectsDelegate {
                                 .tooltip(Tooltip::text(tooltip_path)),
                         )
                         .end_slot(secondary_actions)
-                        .show_end_slot_on_hover()
+                        .when(self.style == ProjectPickerStyle::Modal, |item| {
+                            item.show_end_slot_on_hover()
+                        })
                         .into_any_element(),
                 )
             }
@@ -1664,15 +1665,6 @@ impl PickerDelegate for RecentProjectsDelegate {
 
         let selected_entry = self.filtered_entries.get(self.selected_index);
 
-        let is_current_workspace_entry =
-            if let Some(ProjectPickerEntry::ProjectGroup(hit)) = selected_entry {
-                self.window_project_groups
-                    .get(hit.candidate_id)
-                    .is_some_and(|key| self.is_active_project_group(key, cx))
-            } else {
-                false
-            };
-
         let secondary_footer_actions: Option<AnyElement> = match selected_entry {
             Some(ProjectPickerEntry::OpenFolder { .. }) => Some(
                 Button::new("remove_selected", t!("Remove Folder"))
@@ -1686,8 +1678,8 @@ impl PickerDelegate for RecentProjectsDelegate {
                     })
                     .into_any_element(),
             ),
-            Some(ProjectPickerEntry::ProjectGroup(_)) if !is_current_workspace_entry => Some(
-                Button::new("remove_selected", t!("Remove from Window"))
+            Some(ProjectPickerEntry::ProjectGroup(_)) => Some(
+                Button::new("close_selected", t!("Close Project"))
                     .key_binding(KeyBinding::for_action_in(
                         &RemoveSelected,
                         &focus_handle,
@@ -2354,26 +2346,29 @@ impl RecentProjectsDelegate {
         picker.update_matches(query, window, cx);
     }
 
-    fn remove_project_group(
-        &mut self,
+    fn close_project_group(
         key: ProjectGroupKey,
         window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) {
-        if let Some(handle) = window.window_handle().downcast::<MultiWorkspace>() {
-            let key_for_remove = key.clone();
-            cx.defer(move |cx| {
-                handle
-                    .update(cx, |multi_workspace, window, cx| {
-                        multi_workspace
-                            .remove_project_group(&key_for_remove, window, cx)
-                            .detach_and_log_err(cx);
-                    })
-                    .log_err();
-            });
-        }
-
-        self.window_project_groups.retain(|k| k != &key);
+        let Some(handle) = window.window_handle().downcast::<MultiWorkspace>() else {
+            return;
+        };
+        cx.emit(DismissEvent);
+        cx.defer(move |cx| {
+            handle
+                .update(cx, |multi_workspace, window, cx| {
+                    multi_workspace
+                        .remove_project_group(&key, window, cx)
+                        .detach_and_prompt_err(
+                            &t!("Failed to close project"),
+                            window,
+                            cx,
+                            |_, _, _| None,
+                        );
+                })
+                .log_err();
+        });
     }
 
     fn is_current_workspace(

@@ -1691,6 +1691,21 @@ impl ProjectPanel {
         cx.notify();
     }
 
+    fn refresh_worktree(
+        &self,
+        worktree_id: WorktreeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(worktree) = self.project.read(cx).worktree_for_id(worktree_id, cx)
+            && let Some(worktree) = worktree.read(cx).as_local()
+        {
+            worktree
+                .rescan(cx)
+                .detach_and_notify_err(self.workspace.clone(), window, cx);
+        }
+    }
+
     fn collapse_all_entries(
         &mut self,
         _: &CollapseAllEntries,
@@ -6353,8 +6368,9 @@ impl ProjectPanel {
 
         let depth = details.depth;
         let worktree_id = details.worktree_id;
-        let show_collapse_all =
-            kind.is_dir() && self.project.read(cx).entry_is_worktree_root(entry_id, cx);
+        let project = self.project.read(cx);
+        let show_collapse_all = kind.is_dir() && project.entry_is_worktree_root(entry_id, cx);
+        let show_refresh = show_collapse_all && project.is_local();
 
         let bg_color = if is_marked {
             item_colors.marked
@@ -6906,6 +6922,23 @@ impl ProjectPanel {
                                         this.child(git_indicator)
                                     })
                                     .when_some(symlink_element, |this, el| this.child(el))
+                                    .when(show_refresh, |this| {
+                                        this.child(
+                                            IconButton::new("refresh_files", IconName::RotateCw)
+                                                .icon_size(IconSize::Small)
+                                                .tooltip(Tooltip::text(t!("Refresh File Tree")))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.refresh_worktree(
+                                                            worktree_id,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
+                                        )
+                                    })
                                     .when(show_collapse_all, |this| {
                                         this.child(
                                             IconButton::new("collapse_all", IconName::ListCollapse)

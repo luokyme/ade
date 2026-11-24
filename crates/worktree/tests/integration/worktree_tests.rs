@@ -1553,6 +1553,87 @@ async fn test_root_rescan_reconciles_stale_state(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn test_manual_rescan_updates_nested_entries_without_fs_events(cx: &mut TestAppContext) {
+    init_test(cx);
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree("/root", json!({ "dir": { "old.txt": "" } }))
+        .await;
+    let tree = Worktree::local(
+        Path::new("/root"),
+        true,
+        fs.clone(),
+        Default::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+    tree.read_with(cx, |tree, _| tree.as_local().unwrap().scan_complete())
+        .await;
+
+    fs.pause_events();
+    fs.remove_file(Path::new("/root/dir/old.txt"), RemoveOptions::default())
+        .await
+        .unwrap();
+    fs.insert_file(Path::new("/root/dir/new.txt"), Vec::new())
+        .await;
+
+    tree.read_with(cx, |tree, cx| tree.as_local().unwrap().rescan(cx))
+        .await
+        .unwrap();
+
+    tree.read_with(cx, |tree, _| {
+        assert!(tree.entry_for_path(rel_path("dir/old.txt")).is_none());
+        assert!(tree.entry_for_path(rel_path("dir/new.txt")).is_some());
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[gpui::test]
+async fn test_fs_watches_directory_replaced_at_same_path(cx: &mut TestAppContext) {
+    init_test(cx);
+    cx.executor().allow_parking();
+    let temp_root = TempTree::new(json!({
+        "project": { "dir": { "nested": { "old.txt": "" } } },
+        "incoming": { "nested": { "new.txt": "" } },
+    }));
+    let project_root = temp_root.path().join("project");
+    let tree = Worktree::local(
+        project_root.as_path(),
+        true,
+        Arc::new(RealFs::new(None, cx.executor())),
+        Default::default(),
+        true,
+        WorktreeId::from_proto(0),
+        &mut cx.to_async(),
+    )
+    .await
+    .unwrap();
+    tree.read_with(cx, |tree, _| tree.as_local().unwrap().scan_complete())
+        .await;
+
+    let dir = project_root.join("dir");
+    std::fs::rename(&dir, temp_root.path().join("previous")).unwrap();
+    std::fs::rename(temp_root.path().join("incoming"), &dir).unwrap();
+    wait_for_condition(cx, |cx| {
+        tree.read_with(cx, |tree, _| {
+            tree.entry_for_path(rel_path("dir/nested/new.txt")).is_some()
+        })
+    })
+    .await;
+
+    std::fs::write(dir.join("nested/after-replacement.txt"), "").unwrap();
+    wait_for_condition(cx, |cx| {
+        tree.read_with(cx, |tree, _| {
+            tree.entry_for_path(rel_path("dir/nested/after-replacement.txt"))
+                .is_some()
+        })
+    })
+    .await;
+}
+
+#[gpui::test]
 async fn test_root_rescan_does_not_miss_event_before_readding_root_watcher(
     cx: &mut TestAppContext,
 ) {

@@ -92,7 +92,7 @@ impl ParentElement for Tab {
 
 impl RenderOnce for Tab {
     #[allow(refining_impl_trait)]
-    fn render(self, window: &mut Window, cx: &mut App) -> Stateful<Div> {
+    fn render(self, _: &mut Window, cx: &mut App) -> Stateful<Div> {
         let colors = cx.theme().colors();
         let text_color = if self.selected {
             colors.text
@@ -124,13 +124,6 @@ impl RenderOnce for Tab {
             });
 
         if self.compact {
-            let title_bar_background = if cfg!(any(target_os = "linux", target_os = "freebsd"))
-                && !window.is_window_active()
-            {
-                colors.title_bar_inactive_background
-            } else {
-                colors.title_bar_background
-            };
             let tab_background = if self.selected {
                 colors.element_selected
             } else {
@@ -159,7 +152,7 @@ impl RenderOnce for Tab {
                                     .size(TAB_SLOT_SIZE)
                                     .justify_center()
                                     .rounded_full()
-                                    .bg(title_bar_background.blend(tab_background))
+                                    .bg(colors.editor_background.blend(tab_background))
                                     .child(end_slot),
                             ),
                     )

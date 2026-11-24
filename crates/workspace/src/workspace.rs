@@ -3268,10 +3268,6 @@ impl Workspace {
         self.titlebar_item.clone()
     }
 
-    pub(crate) fn pane_tabs_in_title_bar(&self) -> bool {
-        self.titlebar_item.is_some()
-    }
-
     /// Call the given callback with a workspace whose project is local or remote via WSL (allowing host access).
     ///
     /// If the given workspace has a local project, then it will be passed

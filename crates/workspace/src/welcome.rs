@@ -13,12 +13,12 @@ use gpui::{
 use i18n::{n, t};
 use menu::{SelectNext, SelectPrevious};
 
+use ade_actions::{Extensions, OpenKeymap, OpenOnboarding, OpenSettings, command_palette};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{DefaultOpenBehavior, Settings};
 use ui::{ButtonLike, Divider, DividerColor, KeyBinding, prelude::*};
 use util::ResultExt;
-use ade_actions::{Extensions, OpenKeymap, OpenOnboarding, OpenSettings, command_palette};
 
 #[derive(PartialEq, Clone, Debug, Deserialize, Serialize, JsonSchema, Action)]
 #[action(namespace = welcome)]

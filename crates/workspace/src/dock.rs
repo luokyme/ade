@@ -1101,7 +1101,7 @@ impl Dock {
                             .gap(px(2.))
                             .p(px(2.))
                             .rounded_lg()
-                            .bg(colors.element_background)
+                            .bg(colors.editor_background)
                             .children(tabs.into_iter().map(|(_, panel, icon, tooltip)| {
                                 let name = panel.panel_key();
                                 let selected = Some(panel.panel_id()) == visible_panel;
@@ -1135,7 +1135,7 @@ impl Dock {
                                             .icon_color(Color::Muted)
                                             .selected_icon_color(Color::Default)
                                             .style(ButtonStyle::Subtle)
-                                            .selected_style(ButtonStyle::Outlined)
+                                            .selected_style(ButtonStyle::Filled)
                                             .toggle_state(selected)
                                             .tab_index(0isize)
                                             .aria_label(i18n::translate(tooltip))

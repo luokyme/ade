@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
+use ade_actions::OpenBrowser;
 use gpui::{Action, SharedString};
 use i18n::t;
 use ui::{IconName, IconPosition};
-use ade_actions::OpenBrowser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorSeverity {

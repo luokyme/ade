@@ -561,27 +561,42 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<bool>> {
-        // The active workspace can remain unpinned while the sidebar is
-        // closed. Pin it first: this puts it in the removal set below, and
-        // stops `activate` from pinning it while switching to the
-        // replacement, which would recreate the project group row this
-        // function just deleted.
-        let active_workspace = self.workspace().clone();
+        let mut workspaces = self.workspaces_for_project_group(group_key, cx);
+        let active_workspace = self.workspace();
         if active_workspace.read(cx).project_group_key(cx) == *group_key
-            && !self.is_workspace_retained(&active_workspace)
+            && !self.is_workspace_retained(active_workspace)
         {
-            let index = self.hold(active_workspace, window, cx);
-            self.pin(index, group_key.clone(), cx);
+            workspaces.push(active_workspace.clone());
         }
 
-        let workspaces = self.workspaces_for_project_group(group_key, cx);
+        self.remove_workspaces(
+            workspaces,
+            RemovalIntent::CloseProject,
+            Some(group_key.clone()),
+            window,
+            cx,
+        )
+    }
 
-        let task = self.remove(workspaces, RemovalIntent::CloseProject, window, cx);
-
-        self.project_groups.retain(|group| group.key != *group_key);
+    fn remove_empty_project_group(
+        &mut self,
+        key: &ProjectGroupKey,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self
+            .held
+            .iter()
+            .any(|held| held.workspace.read(cx).project_group_key(cx) == *key)
+        {
+            return false;
+        }
+        let previous_count = self.project_groups.len();
+        self.project_groups.retain(|group| group.key != *key);
+        if self.project_groups.len() == previous_count {
+            return false;
+        }
         cx.emit(MultiWorkspaceEvent::ProjectGroupsChanged);
-
-        task
+        true
     }
 
     /// Returns the nearest retained workspace outside the project group at
@@ -1351,18 +1366,32 @@ impl MultiWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<bool>> {
-        let workspaces: Vec<_> = workspaces.into_iter().collect();
+        self.remove_workspaces(workspaces.into_iter().collect(), intent, None, window, cx)
+    }
 
+    fn remove_workspaces(
+        &mut self,
+        workspaces: Vec<Entity<Workspace>>,
+        intent: RemovalIntent,
+        project_group_to_close: Option<ProjectGroupKey>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<bool>> {
         if workspaces.is_empty() {
+            if project_group_to_close
+                .as_ref()
+                .is_some_and(|key| self.remove_empty_project_group(key, cx))
+            {
+                self.serialize(cx);
+                cx.notify();
+            }
             return Task::ready(Ok(false));
         }
 
         let original_active = self.workspace().clone();
         let group_key = original_active.read(cx).project_group_key(cx);
 
-        // Record the neighborhood of the project as the user sees it now:
-        // callers like `remove_project_group` delete the project row itself
-        // before the removal task runs.
+        // Preserve the project's neighbors in case their order changes while prompting.
         let group_index = self
             .project_groups
             .iter()
@@ -1465,7 +1494,10 @@ impl MultiWorkspace {
                     this.activate(original_active.clone(), None, window, cx);
                 }
 
-                if removed_any {
+                let group_removed = project_group_to_close
+                    .as_ref()
+                    .is_some_and(|key| this.remove_empty_project_group(key, cx));
+                if removed_any || group_removed {
                     this.serialize(cx);
                     cx.notify();
                 }

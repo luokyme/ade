@@ -140,7 +140,7 @@ impl fmt::Debug for LoadedBinaryFile {
 pub struct LocalWorktree {
     snapshot: LocalSnapshot,
     scan_requests_tx: async_channel::Sender<ScanRequest>,
-    path_prefixes_to_scan_tx: async_channel::Sender<PathPrefixScanRequest>,
+    directory_scan_requests_tx: async_channel::Sender<DirectoryScanRequest>,
     is_scanning: (watch::Sender<bool>, watch::Receiver<bool>),
     snapshot_subscriptions: VecDeque<(usize, oneshot::Sender<()>)>,
     _background_scanner_tasks: Vec<Task<()>>,
@@ -155,9 +155,15 @@ pub struct LocalWorktree {
     force_defer_watch: bool,
 }
 
-pub struct PathPrefixScanRequest {
-    path: Arc<RelPath>,
-    done: SmallVec<[barrier::Sender; 1]>,
+enum DirectoryScanRequest {
+    LoadPrefix {
+        path: Arc<RelPath>,
+        done: SmallVec<[barrier::Sender; 1]>,
+    },
+    Rescan {
+        applied: barrier::Sender,
+        result: oneshot::Sender<Result<()>>,
+    },
 }
 
 struct ScanRequest {
@@ -593,7 +599,8 @@ impl Worktree {
             }
 
             let (scan_requests_tx, scan_requests_rx) = async_channel::unbounded();
-            let (path_prefixes_to_scan_tx, path_prefixes_to_scan_rx) = async_channel::unbounded();
+            let (directory_scan_requests_tx, directory_scan_requests_rx) =
+                async_channel::unbounded();
             let mut worktree = LocalWorktree {
                 share_private_files,
                 next_entry_id,
@@ -602,7 +609,7 @@ impl Worktree {
                 snapshot_subscriptions: Default::default(),
                 update_observer: None,
                 scan_requests_tx,
-                path_prefixes_to_scan_tx,
+                directory_scan_requests_tx,
                 _background_scanner_tasks: Vec::new(),
                 fs,
                 fs_case_sensitive,
@@ -611,7 +618,7 @@ impl Worktree {
                 scanning_enabled,
                 force_defer_watch: false,
             };
-            worktree.start_background_scanner(scan_requests_rx, path_prefixes_to_scan_rx, cx);
+            worktree.start_background_scanner(scan_requests_rx, directory_scan_requests_rx, cx);
             Worktree::Local(worktree)
         }))
     }
@@ -1321,11 +1328,11 @@ impl LocalWorktree {
 
     fn restart_background_scanners(&mut self, cx: &Context<Worktree>) {
         let (scan_requests_tx, scan_requests_rx) = async_channel::unbounded();
-        let (path_prefixes_to_scan_tx, path_prefixes_to_scan_rx) = async_channel::unbounded();
+        let (directory_scan_requests_tx, directory_scan_requests_rx) = async_channel::unbounded();
         self.scan_requests_tx = scan_requests_tx;
-        self.path_prefixes_to_scan_tx = path_prefixes_to_scan_tx;
+        self.directory_scan_requests_tx = directory_scan_requests_tx;
 
-        self.start_background_scanner(scan_requests_rx, path_prefixes_to_scan_rx, cx);
+        self.start_background_scanner(scan_requests_rx, directory_scan_requests_rx, cx);
         let always_included_entries = self
             .snapshot
             .entries(true, 0)
@@ -1345,7 +1352,7 @@ impl LocalWorktree {
     fn start_background_scanner(
         &mut self,
         scan_requests_rx: async_channel::Receiver<ScanRequest>,
-        path_prefixes_to_scan_rx: async_channel::Receiver<PathPrefixScanRequest>,
+        directory_scan_requests_rx: async_channel::Receiver<DirectoryScanRequest>,
         cx: &Context<Worktree>,
     ) {
         let snapshot = self.snapshot();
@@ -1378,7 +1385,7 @@ impl LocalWorktree {
                     status_updates_tx: scan_states_tx,
                     executor: background,
                     scan_requests_rx,
-                    path_prefixes_to_scan_rx,
+                    directory_scan_requests_rx,
                     next_entry_id,
                     state: async_lock::Mutex::new(BackgroundScannerState {
                         prev_snapshot: snapshot.snapshot.clone(),
@@ -2137,13 +2144,32 @@ impl LocalWorktree {
 
     pub fn add_path_prefix_to_scan(&self, path_prefix: Arc<RelPath>) -> barrier::Receiver {
         let (tx, rx) = barrier::channel();
-        self.path_prefixes_to_scan_tx
-            .try_send(PathPrefixScanRequest {
+        self.directory_scan_requests_tx
+            .try_send(DirectoryScanRequest::LoadPrefix {
                 path: path_prefix,
                 done: smallvec![tx],
             })
             .ok();
         rx
+    }
+
+    pub fn rescan(&self, cx: &App) -> Task<Result<()>> {
+        let (applied, mut snapshot_applied) = barrier::channel();
+        let (result, scan_result) = oneshot::channel();
+        if self
+            .directory_scan_requests_tx
+            .try_send(DirectoryScanRequest::Rescan { applied, result })
+            .is_err()
+        {
+            return Task::ready(Err(anyhow!("The worktree scanner is unavailable")));
+        }
+        cx.background_spawn(async move {
+            scan_result
+                .await
+                .context("The worktree scan was interrupted")??;
+            snapshot_applied.recv().await;
+            Ok(())
+        })
     }
 
     pub fn refresh_entry(
@@ -4343,7 +4369,7 @@ struct BackgroundScanner {
     status_updates_tx: UnboundedSender<ScanState>,
     executor: BackgroundExecutor,
     scan_requests_rx: async_channel::Receiver<ScanRequest>,
-    path_prefixes_to_scan_rx: async_channel::Receiver<PathPrefixScanRequest>,
+    directory_scan_requests_rx: async_channel::Receiver<DirectoryScanRequest>,
     next_entry_id: Arc<AtomicUsize>,
     phase: BackgroundScannerPhase,
     watcher: Arc<dyn Watcher>,
@@ -4579,23 +4605,40 @@ impl BackgroundScanner {
                     }
                 }
 
-                path_prefix_request = self.path_prefixes_to_scan_rx.recv().fuse() => {
-                    let Ok(request) = path_prefix_request else { break };
+                request = self.directory_scan_requests_rx.recv().fuse() => {
+                    let Ok(request) = request else { break };
+                    let (path, done) = match request {
+                        DirectoryScanRequest::LoadPrefix { path, done } => (path, done),
+                        DirectoryScanRequest::Rescan { applied, result } => {
+                            let root_path = self.state.lock().await.snapshot.abs_path.clone();
+                            let scan_result = self.process_events_with_barrier(
+                                vec![PathEvent {
+                                    path: root_path.as_path().to_path_buf(),
+                                    kind: Some(PathEventKind::Rescan),
+                                }],
+                                smallvec![applied],
+                            ).await;
+                            if let Err(Err(error)) = result.send(scan_result) {
+                                log::error!("Worktree scan failed: {error:#}");
+                            }
+                            continue;
+                        }
+                    };
 
-                    if self.state.lock().await.path_prefixes_to_scan.contains(&request.path) {
-                        self.send_status_update(false, request.done, &[]).await;
+                    if self.state.lock().await.path_prefixes_to_scan.contains(&path) {
+                        self.send_status_update(false, done, &[]).await;
                         continue;
                     }
 
-                    log::trace!("adding path prefix {:?}", request.path);
+                    log::trace!("adding path prefix {path:?}");
 
-                    let did_scan = self.forcibly_load_paths(std::slice::from_ref(&request.path)).await;
+                    let did_scan = self.forcibly_load_paths(std::slice::from_ref(&path)).await;
                     if did_scan {
                         let abs_path =
                         {
                             let mut state = self.state.lock().await;
-                            state.path_prefixes_to_scan.insert(request.path.clone());
-                            state.snapshot.absolutize(&request.path)
+                            state.path_prefixes_to_scan.insert(path.clone());
+                            state.snapshot.absolutize(&path)
                         };
 
                         if let Some(abs_path) = self.fs.canonicalize(&abs_path).await.log_err() {
@@ -4606,7 +4649,7 @@ impl BackgroundScanner {
                             .await;
                         }
                     }
-                    self.send_status_update(false, request.done, &[]).await;
+                    self.send_status_update(false, done, &[]).await;
                 }
 
                 paths = fs_events_rx.next().fuse() => {
@@ -4831,13 +4874,23 @@ impl BackgroundScanner {
         }
     }
 
-    async fn process_events(&self, mut events: Vec<PathEvent>) {
+    async fn process_events(&self, events: Vec<PathEvent>) {
+        self.process_events_with_barrier(events, SmallVec::new())
+            .await
+            .log_err();
+    }
+
+    async fn process_events_with_barrier(
+        &self,
+        mut events: Vec<PathEvent>,
+        applied: SmallVec<[barrier::Sender; 1]>,
+    ) -> Result<()> {
         let root_path = self.state.lock().await.snapshot.abs_path.clone();
         let root_canonical_path = match self.fs.canonicalize(root_path.as_path()).await {
             Ok(path) => path,
             Err(error) => {
                 self.report_root_moved_or_deleted(&root_path, &error).await;
-                return;
+                return Err(error).with_context(|| format!("Could not scan {root_path}"));
             }
         };
         let root_canonical_path = SanitizedPath::new(&root_canonical_path);
@@ -5145,7 +5198,7 @@ impl BackgroundScanner {
         }
 
         if relative_paths.is_empty() && dot_git_abs_paths.is_empty() {
-            return;
+            return Ok(());
         }
 
         if !work_dirs_needing_exclude_update.is_empty() {
@@ -5212,8 +5265,12 @@ impl BackgroundScanner {
                 state.scanned_dirs.remove(&entry.id);
             }
         }
-        self.send_status_update(false, SmallVec::new(), &relative_paths)
-            .await;
+        anyhow::ensure!(
+            self.send_status_update(false, applied, &relative_paths)
+                .await,
+            "The worktree scan was interrupted"
+        );
+        Ok(())
     }
 
     async fn update_global_gitignore(&self, abs_path: &Path) {
@@ -5392,17 +5449,51 @@ impl BackgroundScanner {
     }
 
     async fn scan_dir(&self, job: &ScanJob) -> Result<()> {
+        if self.settings.is_path_excluded(&job.path) {
+            log::error!("skipping excluded directory {:?}", job.path);
+            return Ok(());
+        }
+
+        // A non-recursive watcher misses changes between reading a new
+        // directory and registering its watch. Use the resolved path for
+        // external symlinks so their target emits events for this worktree.
+        let watched_abs_path: Option<Arc<Path>> = if job.is_external {
+            self.fs
+                .canonicalize(&job.abs_path)
+                .await
+                .log_err()
+                .map(Into::into)
+        } else {
+            Some(job.abs_path.clone())
+        };
+        if let Some(watched_abs_path) = &watched_abs_path {
+            self.watcher.add(watched_abs_path).log_err();
+        }
+
         let root_abs_path;
         let root_char_bag;
         {
-            let snapshot = &self.state.lock().await.snapshot;
-            if self.settings.is_path_excluded(&job.path) {
-                log::error!("skipping excluded directory {:?}", job.path);
-                return Ok(());
+            let mut state = self.state.lock().await;
+            if let Some(watched_abs_path) = watched_abs_path {
+                if job.is_external {
+                    state
+                        .snapshot
+                        .external_canonical_to_relative
+                        .insert(watched_abs_path.clone(), job.path.clone());
+                }
+                if let Some(entry_id) = state
+                    .snapshot
+                    .entry_for_path(&job.path)
+                    .map(|entry| entry.id)
+                {
+                    state
+                        .watched_dir_abs_paths_by_entry_id
+                        .insert(entry_id, watched_abs_path);
+                }
             }
             log::trace!("scanning directory {:?}", job.path);
-            root_abs_path = snapshot.abs_path().clone();
-            root_char_bag = snapshot.root_char_bag;
+            root_abs_path = state.snapshot.abs_path().clone();
+            root_char_bag = state.snapshot.root_char_bag;
         }
 
         let next_entry_id = self.next_entry_id.clone();
@@ -5411,6 +5502,7 @@ impl BackgroundScanner {
         let mut root_canonical_path = None;
         let mut new_entries: Vec<Entry> = Vec::new();
         let mut new_jobs: Vec<Option<ScanJob>> = Vec::new();
+
         let mut child_paths = self
             .fs
             .read_dir(&job.abs_path)
@@ -5627,50 +5719,6 @@ impl BackgroundScanner {
         }
 
         state.populate_dir(job.path.clone(), new_entries, new_ignore);
-        // For external entries, watch the canonical (resolved) path so OS-level
-        // FS events on the real filesystem location are observed. The same
-        // canonical path is stored in both `external_canonical_to_relative`
-        // (for translating canonical-path FS events back to worktree-relative
-        // paths) and `watched_dir_abs_paths_by_entry_id` (used by `remove_path`
-        // to know which abs path to unwatch), so both cleanup paths agree on
-        // the path the watcher was actually registered on.
-        //
-        // `canonicalize` is an async filesystem operation that may suspend, so
-        // the lock must not be held across the await point below.
-        drop(state);
-        let watched_abs_path: Option<Arc<Path>> = if job.is_external {
-            self.fs
-                .canonicalize(job.abs_path.as_ref())
-                .await
-                .ok()
-                .map(|canonical| {
-                    let canonical: Arc<Path> = canonical.into();
-                    self.watcher.add(&canonical).log_err();
-                    canonical
-                })
-        } else {
-            self.watcher.add(job.abs_path.as_ref()).log_err();
-            Some(job.abs_path.clone())
-        };
-
-        let mut state = self.state.lock().await;
-        if let Some(watched_abs_path) = &watched_abs_path {
-            if job.is_external {
-                state
-                    .snapshot
-                    .external_canonical_to_relative
-                    .insert(watched_abs_path.clone(), job.path.clone());
-            }
-            if let Some(entry_id) = state
-                .snapshot
-                .entry_for_path(&job.path)
-                .map(|entry| entry.id)
-            {
-                state
-                    .watched_dir_abs_paths_by_entry_id
-                    .insert(entry_id, watched_abs_path.clone());
-            }
-        }
 
         for new_job in new_jobs.into_iter().flatten() {
             job.scan_queue
@@ -5738,11 +5786,30 @@ impl BackgroundScanner {
         let mut paths_to_process = Vec::with_capacity(relative_paths.len());
         for (path, metadata) in relative_paths.iter().zip(metadata.iter()) {
             let path_was_removed = matches!(metadata, Ok(None));
-            let removed_descendant_paths = if path_was_removed || doing_recursive_update {
+            let directory_was_replaced = doing_recursive_update
+                && match metadata {
+                    Ok(Some((metadata, _))) => {
+                        state.snapshot.entry_for_path(path).is_some_and(|entry| {
+                            entry.is_dir() && (!metadata.is_dir || entry.inode != metadata.inode)
+                        })
+                    }
+                    _ => false,
+                };
+            let mut removed_descendant_paths = if path_was_removed || doing_recursive_update {
                 state.remove_path_from_snapshot(path, path_was_removed)
             } else {
                 Vec::new()
             };
+            if directory_was_replaced {
+                // An inotify watch can still point to the old inode when the
+                // directory is replaced at the same path between scans.
+                state.unwatch_path(
+                    self.watcher.as_ref(),
+                    path,
+                    mem::take(&mut removed_descendant_paths),
+                    true,
+                );
+            }
             paths_to_process.push((path, metadata, removed_descendant_paths));
         }
 
