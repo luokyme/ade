@@ -1101,7 +1101,7 @@ impl Dock {
                             .gap(px(2.))
                             .p(px(2.))
                             .rounded_lg()
-                            .bg(colors.editor_background)
+                            .bg(colors.element_background)
                             .children(tabs.into_iter().map(|(_, panel, icon, tooltip)| {
                                 let name = panel.panel_key();
                                 let selected = Some(panel.panel_id()) == visible_panel;
@@ -1115,6 +1115,8 @@ impl Dock {
                                 let panel = panel.clone();
                                 let dock = dock.clone();
                                 let workspace = sidebar.workspace.clone();
+                                let selected_background = colors.ghost_element_selected;
+                                let selected_border = colors.border_variant;
 
                                 right_click_menu(name)
                                     .menu(move |window, cx| {
@@ -1128,41 +1130,53 @@ impl Dock {
                                         let click_action = action.boxed_clone();
                                         let tooltip_action = action.boxed_clone();
                                         let focus = focus.clone();
-                                        IconButton::new((name, selected as u64), icon)
-                                            .width(px(28.))
-                                            .height(px(22.).into())
-                                            .icon_size(IconSize::Small)
-                                            .icon_color(Color::Muted)
-                                            .selected_icon_color(Color::Default)
-                                            .style(ButtonStyle::Subtle)
-                                            .selected_style(ButtonStyle::Filled)
-                                            .toggle_state(selected)
-                                            .tab_index(0isize)
-                                            .aria_label(i18n::translate(tooltip))
-                                            .tooltip(move |_, cx| {
-                                                Tooltip::for_action(
-                                                    i18n::translate(tooltip),
-                                                    &*tooltip_action,
-                                                    cx,
-                                                )
+                                        div()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(gpui::transparent_black())
+                                            .when(selected, |container| {
+                                                container
+                                                    .bg(selected_background)
+                                                    .border_color(selected_border)
                                             })
-                                            .on_click(move |_, window, cx| {
-                                                if selected {
-                                                    focus.focus(window, cx);
-                                                } else {
-                                                    activate_panel_button(
-                                                        &focus,
-                                                        &*click_action,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            })
-                                            .when(has_changes, |button| {
-                                                button.indicator(
-                                                    ui::Indicator::dot().color(Color::Accent),
-                                                )
-                                            })
+                                            .child(
+                                                IconButton::new((name, selected as u64), icon)
+                                                    .width(px(26.))
+                                                    .height(px(20.).into())
+                                                    .icon_size(IconSize::Small)
+                                                    .icon_color(Color::Muted)
+                                                    .selected_icon_color(Color::Default)
+                                                    .style(ButtonStyle::Subtle)
+                                                    .selected_style(ButtonStyle::Transparent)
+                                                    .toggle_state(selected)
+                                                    .tab_index(0isize)
+                                                    .aria_label(i18n::translate(tooltip))
+                                                    .tooltip(move |_, cx| {
+                                                        Tooltip::for_action(
+                                                            i18n::translate(tooltip),
+                                                            &*tooltip_action,
+                                                            cx,
+                                                        )
+                                                    })
+                                                    .on_click(move |_, window, cx| {
+                                                        if selected {
+                                                            focus.focus(window, cx);
+                                                        } else {
+                                                            activate_panel_button(
+                                                                &focus,
+                                                                &*click_action,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        }
+                                                    })
+                                                    .when(has_changes, |button| {
+                                                        button.indicator(
+                                                            ui::Indicator::dot()
+                                                                .color(Color::Accent),
+                                                        )
+                                                    }),
+                                            )
                                     })
                             })),
                     )
