@@ -309,7 +309,7 @@ impl Render for TitleBar {
                         )
                     })
                     .when(title_bar_settings.show_project_items, |this| {
-                        this.child(self.render_project_tabs(project_name, window, cx))
+                        this.child(self.render_project_tabs(project_name, cx))
                     }),
             )
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
@@ -717,7 +717,6 @@ impl TitleBar {
     fn render_project_tabs(
         &self,
         active_name: Option<SharedString>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let multi_workspace = self.multi_workspace.as_ref().and_then(|mw| mw.upgrade());
@@ -725,13 +724,28 @@ impl TitleBar {
             .as_ref()
             .map(|mw| mw.read(cx).project_group_keys())
             .unwrap_or_default();
-        let active_key = self.project.read(cx).project_group_key(cx);
-        let Some(multi_workspace) =
-            multi_workspace.filter(|_| keys.len() > 1 && keys.contains(&active_key))
-        else {
-            return self
-                .render_project_name(active_name, window, cx)
-                .into_any_element();
+        let project = self.project.read(cx);
+        let active_key = project.project_group_key(cx);
+        let multi_workspace = multi_workspace.filter(|_| keys.contains(&active_key));
+        let active_roots = multi_workspace
+            .as_ref()
+            .map(|multi_workspace| {
+                multi_workspace
+                    .read(cx)
+                    .project_group_roots(&active_key, cx)
+            })
+            .unwrap_or_else(|| {
+                let mut roots = active_key.path_list().paths().to_vec();
+                roots.extend(
+                    project
+                        .visible_worktrees(cx)
+                        .map(|worktree| worktree.read(cx).abs_path().to_path_buf()),
+                );
+                roots
+            });
+        let active_activity = workspace::project_agent_activity(&active_roots, cx);
+        let Some(multi_workspace) = multi_workspace.filter(|_| keys.len() > 1) else {
+            return self.render_project_name(active_name, active_activity, cx);
         };
 
         let colors = cx.theme().colors();
@@ -752,7 +766,7 @@ impl TitleBar {
                     .border_1()
                     .border_color(current_border)
                     .bg(current_background)
-                    .child(self.render_project_name(active_name.clone(), window, cx));
+                    .child(self.render_project_name(active_name.clone(), active_activity, cx));
                 tabs = tabs.child(draggable_project_tab(
                     index,
                     key,
@@ -799,9 +813,9 @@ impl TitleBar {
     fn render_project_name(
         &self,
         name: Option<SharedString>,
-        _: &mut Window,
+        activity: Option<AgentActivity>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> AnyElement {
         let workspace = self.workspace.clone();
 
         let is_project_selected = name.is_some();
@@ -839,6 +853,14 @@ impl TitleBar {
                 Button::new("project_name_trigger", display_name)
                     .label_size(LabelSize::Small)
                     .tab_index(0isize)
+                    .when_some(activity, |this, activity| {
+                        this.aria_description(recent_projects::activity_label(activity))
+                            .start_icon(
+                                Icon::new(IconName::Circle)
+                                    .size(IconSize::XSmall)
+                                    .color(recent_projects::activity_color(activity)),
+                            )
+                    })
                     .when(self.worktree_count(cx) > 1, |this| {
                         this.end_icon(
                             Icon::new(IconName::ChevronDown)
@@ -849,11 +871,17 @@ impl TitleBar {
                     .selected_style(ButtonStyle::Tinted(TintColor::Accent))
                     .when(!is_project_selected, |s| s.color(Color::Muted)),
                 move |_window, cx| {
-                    Tooltip::for_action(
-                        t!("Recent Projects"),
-                        &ade_actions::OpenRecent::default(),
-                        cx,
-                    )
+                    let action = ade_actions::OpenRecent::default();
+                    if let Some(activity) = activity {
+                        Tooltip::with_meta(
+                            t!("Recent Projects"),
+                            Some(&action),
+                            recent_projects::activity_label(activity),
+                            cx,
+                        )
+                    } else {
+                        Tooltip::for_action(t!("Recent Projects"), &action, cx)
+                    }
                 },
             )
             .anchor(gpui::Anchor::TopLeft)

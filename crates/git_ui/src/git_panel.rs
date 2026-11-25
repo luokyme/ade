@@ -1531,8 +1531,7 @@ impl From<&Arc<InitialGraphCommitData>> for CommitHistoryEntry {
     }
 }
 
-const MIN_PANEL_EDITOR_LINES: usize = 3;
-const MAX_PANEL_EDITOR_LINES: usize = 6;
+const PANEL_EDITOR_LINES: usize = 1;
 
 pub(crate) fn commit_message_editor(
     commit_message_buffer: Entity<Buffer>,
@@ -1543,15 +1542,11 @@ pub(crate) fn commit_message_editor(
     cx: &mut Context<Editor>,
 ) -> Editor {
     let buffer = cx.new(|cx| MultiBuffer::singleton(commit_message_buffer, cx));
-    let max_lines = if in_panel { MAX_PANEL_EDITOR_LINES } else { 18 };
+    let visible_lines = if in_panel { PANEL_EDITOR_LINES } else { 18 };
     let mut commit_editor = Editor::new(
         EditorMode::AutoHeight {
-            min_lines: if in_panel {
-                MIN_PANEL_EDITOR_LINES
-            } else {
-                max_lines
-            },
-            max_lines: Some(max_lines),
+            min_lines: visible_lines,
+            max_lines: Some(visible_lines),
         },
         buffer,
         None,
@@ -6283,8 +6278,8 @@ impl GitPanel {
                 })
             } else {
                 editor.set_mode(EditorMode::AutoHeight {
-                    min_lines: MIN_PANEL_EDITOR_LINES,
-                    max_lines: Some(MAX_PANEL_EDITOR_LINES),
+                    min_lines: PANEL_EDITOR_LINES,
+                    max_lines: Some(PANEL_EDITOR_LINES),
                 })
             }
         });
@@ -6797,7 +6792,7 @@ impl GitPanel {
                 .trim_end_matches("/"),
         ));
         let editor_is_long = self.commit_editor.update(cx, |editor, cx| {
-            editor.max_point(cx).row().0 >= MAX_PANEL_EDITOR_LINES as u32
+            editor.max_point(cx).row().0 >= PANEL_EDITOR_LINES as u32
         });
 
         let max_title_length = GitPanelSettings::get_global(cx).commit_title_max_length;
@@ -14926,8 +14921,11 @@ mod tests {
         panel.update_in(cx, |panel, window, cx| {
             assert!(!panel.commit_editor_expanded);
             assert!(matches!(
-                panel.commit_editor.read(cx).mode().clone(),
-                EditorMode::AutoHeight { .. }
+                panel.commit_editor.read(cx).mode(),
+                EditorMode::AutoHeight {
+                    min_lines: 1,
+                    max_lines: Some(1),
+                }
             ));
 
             panel.toggle_fill_commit_editor(&ToggleFillCommitEditor, window, cx);
@@ -14940,8 +14938,11 @@ mod tests {
             panel.toggle_fill_commit_editor(&ToggleFillCommitEditor, window, cx);
             assert!(!panel.commit_editor_expanded);
             assert!(matches!(
-                panel.commit_editor.read(cx).mode().clone(),
-                EditorMode::AutoHeight { .. }
+                panel.commit_editor.read(cx).mode(),
+                EditorMode::AutoHeight {
+                    min_lines: 1,
+                    max_lines: Some(1),
+                }
             ));
         });
     }
