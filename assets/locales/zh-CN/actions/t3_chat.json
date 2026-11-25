@@ -1,0 +1,22 @@
+{
+  "t3_chat::NewThread": {
+    "name": "新建 T3 Code 对话",
+    "description": "在此项目中开始新的 T3 Code 对话。"
+  },
+  "t3_chat::Reconnect": {
+    "name": "重新连接 T3 Code",
+    "description": "再次连接到 T3 Code 服务。"
+  },
+  "t3_chat::Send": {
+    "name": "发送",
+    "description": "发送 T3 Code 输入框中的消息。"
+  },
+  "t3_chat::Stop": {
+    "name": "停止",
+    "description": "停止此 T3 Code 对话中智能体当前这一轮的回复。"
+  },
+  "t3_chat::ToggleFocus": {
+    "name": "切换 T3 Code 面板",
+    "description": "显示或隐藏 T3 Code 面板。"
+  }
+}

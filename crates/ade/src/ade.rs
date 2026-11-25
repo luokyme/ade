@@ -614,6 +614,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
         let agent_panel = agent_chat::AgentPanel::load(workspace_handle.clone(), cx.clone());
         let chat_panel = agent_chat::ChatPanel::load(workspace_handle.clone(), cx.clone());
+        let t3_panel = t3_chat::T3Panel::load(workspace_handle.clone(), cx.clone());
 
         async fn add_panel_when_ready(
             panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
@@ -637,6 +638,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(agent_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(chat_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(t3_panel, workspace_handle.clone(), cx.clone()),
         );
 
         workspace_handle.update_in(cx, |workspace, window, cx| {
@@ -5491,6 +5493,7 @@ mod tests {
                 "stash_picker",
                 "svg",
                 "syntax_tree_view",
+                "t3_chat",
                 "tab_switcher",
                 "tabular_data",
                 "task",
@@ -5693,6 +5696,7 @@ mod tests {
             git_ui::init(cx);
             project_panel::init(cx);
             agent_chat::init(None, cx);
+            t3_chat::init(cx);
             terminal_view::init(cx);
             image_viewer::init(cx);
             tasks_ui::init(cx);
