@@ -3206,7 +3206,6 @@ impl ThreadView {
             .unwrap_or_default();
         let mut line = h_flex()
             .id("t3-plan-usage")
-            .px(px(8.))
             .gap(px(10.))
             .text_size(ui(11.))
             .text_color(colors.text_muted);
@@ -3455,6 +3454,10 @@ impl ThreadView {
                 )
             })
             .child(div().flex_1())
+            .children(
+                self.render_plan_usage(cx)
+                    .map(|usage| div().min_w_0().overflow_hidden().child(usage)),
+            )
             .child(permission)
             .into_any_element()
     }
@@ -3817,8 +3820,7 @@ impl Render for ThreadView {
                     .children(queue)
                     .children(self.render_completion(cx).map(|menu| div().pb(px(6.)).child(menu)))
                     .child(self.render_composer(cx))
-                    .child(div().pt(px(4.)).child(self.render_composer_footer(cx)))
-                    .children(self.render_plan_usage(cx).map(|usage| div().pt(px(2.)).child(usage))),
+                    .child(div().pt(px(4.)).child(self.render_composer_footer(cx))),
             )
     }
 }
