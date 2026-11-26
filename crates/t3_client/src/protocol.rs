@@ -129,7 +129,10 @@ impl ProviderInfo {
 
     pub fn supports_runtime_mode(&self, mode: &str) -> bool {
         self.supported_runtime_modes.is_empty()
-            || self.supported_runtime_modes.iter().any(|supported| supported == mode)
+            || self
+                .supported_runtime_modes
+                .iter()
+                .any(|supported| supported == mode)
     }
 
     pub fn model(&self, slug: &str) -> Option<&ProviderModel> {
@@ -320,7 +323,30 @@ pub struct ThreadShell {
     #[serde(default)]
     pub pinned_at: Option<String>,
     #[serde(default)]
+    pub pin_order_key: Option<String>,
+    /// Work the agent left running after its turn, such as a background build or a subagent.
+    #[serde(default)]
+    pub pending_background_tasks: Vec<BackgroundTask>,
+    #[serde(default)]
     pub deleted_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundTask {
+    pub task_id: String,
+    /// `command`, `subagent`, `monitor` or `background_task`.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    /// The turn item that started the work.
+    #[serde(default)]
+    pub item_id: Option<String>,
+    #[serde(default)]
+    pub child_thread_id: Option<String>,
 }
 
 impl ThreadShell {
@@ -808,11 +834,14 @@ pub fn attachment_media_type(file_name: &str) -> (String, bool) {
         | "sh" | "c" | "h" | "cpp" | "go" | "java" | "css" => "text/plain",
         _ => "application/octet-stream",
     };
-    (media_type.to_string(), SUPPORTED_IMAGE_TYPES.contains(&media_type))
+    (
+        media_type.to_string(),
+        SUPPORTED_IMAGE_TYPES.contains(&media_type),
+    )
 }
 
 /// An uploaded file a message can carry, as `message.dispatch` expects it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatAttachment {
     #[serde(rename = "type")]
@@ -821,6 +850,9 @@ pub struct ChatAttachment {
     pub name: String,
     pub mime_type: String,
     pub size_bytes: u64,
+    /// Fields Ade does not read, such as `source`, kept so a queued edit sends files back intact.
+    #[serde(flatten, skip_serializing_if = "Map::is_empty")]
+    pub other: Map<String, Value>,
 }
 
 /// Commands for `orchestration.dispatchCommand`. Ade sends them as a desktop client.
@@ -872,6 +904,27 @@ pub mod commands {
         })
     }
 
+    /// `order_key` places the thread among the pinned ones; see `ShellState::top_pin_order_key`.
+    pub fn pin_thread(thread_id: &str, order_key: Option<&str>) -> Value {
+        let mut command = json!({
+            "type": "thread.pin",
+            "commandId": new_id(),
+            "threadId": thread_id,
+        });
+        if let Some(order_key) = order_key {
+            command["orderKey"] = json!(order_key);
+        }
+        command
+    }
+
+    pub fn unpin_thread(thread_id: &str) -> Value {
+        json!({
+            "type": "thread.unpin",
+            "commandId": new_id(),
+            "threadId": thread_id,
+        })
+    }
+
     /// Sends a queued message into the active run now instead of after it.
     pub fn promote_to_steer(thread_id: &str, queued_run_id: &str, target_run_id: &str) -> Value {
         json!({
@@ -881,6 +934,26 @@ pub mod commands {
             "queuedRunId": queued_run_id,
             "targetRunId": target_run_id,
         })
+    }
+
+    /// Replaces a queued message's text. `attachments` replaces its files too; `None` keeps them.
+    pub fn edit_queued_run(
+        thread_id: &str,
+        run_id: &str,
+        text: &str,
+        attachments: Option<&[ChatAttachment]>,
+    ) -> Value {
+        let mut command = json!({
+            "type": "queued-run.edit",
+            "commandId": new_id(),
+            "threadId": thread_id,
+            "runId": run_id,
+            "text": text,
+        });
+        if let Some(attachments) = attachments {
+            command["attachments"] = json!(attachments);
+        }
+        command
     }
 
     pub fn cancel_queued_run(thread_id: &str, run_id: &str) -> Value {
@@ -908,7 +981,11 @@ pub mod commands {
 
     /// Answers a `user_input_request`. Each answer is keyed by question id and holds an option
     /// label or typed text, or a list of labels for multi-select questions.
-    pub fn answer_questions(thread_id: &str, request_id: &str, answers: Map<String, Value>) -> Value {
+    pub fn answer_questions(
+        thread_id: &str,
+        request_id: &str,
+        answers: Map<String, Value>,
+    ) -> Value {
         json!({
             "type": "runtime-request.respond",
             "commandId": new_id(),
@@ -1147,8 +1224,14 @@ mod tests {
             model: "claude-haiku-4-5".into(),
             options: None,
         };
-        let input =
-            commands::launch_thread("p1", &selection, "full-access", "default", "\n  Fix the build\nmore", &[]);
+        let input = commands::launch_thread(
+            "p1",
+            &selection,
+            "full-access",
+            "default",
+            "\n  Fix the build\nmore",
+            &[],
+        );
         assert_eq!(input["title"], "Fix the build");
         assert_eq!(input["modelSelection"]["instanceId"], "claudeAgent");
         assert!(input["modelSelection"].get("options").is_none());
@@ -1157,21 +1240,47 @@ mod tests {
 
     #[test]
     fn attachments_are_typed_by_extension() {
-        assert_eq!(attachment_media_type("shot.PNG"), ("image/png".into(), true));
-        assert_eq!(attachment_media_type("logo.svg"), ("image/svg+xml".into(), false));
-        assert_eq!(attachment_media_type("notes.md"), ("text/markdown".into(), false));
+        assert_eq!(
+            attachment_media_type("shot.PNG"),
+            ("image/png".into(), true)
+        );
+        assert_eq!(
+            attachment_media_type("logo.svg"),
+            ("image/svg+xml".into(), false)
+        );
+        assert_eq!(
+            attachment_media_type("notes.md"),
+            ("text/markdown".into(), false)
+        );
         let attachment = ChatAttachment {
             kind: "image".into(),
             id: "a1".into(),
             name: "shot.png".into(),
             mime_type: "image/png".into(),
             size_bytes: 3,
+            other: Map::new(),
         };
         let command = commands::send_message("t1", "see", &[attachment], &Delivery::StartNow);
         assert_eq!(
             command["attachments"],
             json!([{ "type": "image", "id": "a1", "name": "shot.png", "mimeType": "image/png", "sizeBytes": 3 }])
         );
+    }
+
+    #[test]
+    fn queued_edits_keep_or_replace_files() {
+        let kept = commands::edit_queued_run("t1", "r2", "new text", None);
+        assert_eq!(kept["type"], "queued-run.edit");
+        assert_eq!(kept["runId"], "r2");
+        assert_eq!(kept["text"], "new text");
+        assert!(kept.get("attachments").is_none());
+
+        let stored = json!({ "type": "file", "id": "f1", "name": "notes.txt",
+                             "mimeType": "text/plain", "sizeBytes": 4,
+                             "source": { "_tag": "pasted-text" } });
+        let attachment: ChatAttachment = serde_json::from_value(stored.clone()).unwrap();
+        let replaced = commands::edit_queued_run("t1", "r2", "new text", Some(&[attachment]));
+        assert_eq!(replaced["attachments"], json!([stored]));
     }
 
     #[test]

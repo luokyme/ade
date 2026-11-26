@@ -5,9 +5,9 @@ use agent_harness::{
 use anyhow::{Result, anyhow};
 use db::kvp::KeyValueStore;
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
-use std::time::Instant;
 use i18n::t;
 use serde_json::Value;
+use std::time::Instant;
 use std::{
     collections::HashMap,
     hash::{Hash as _, Hasher as _},
@@ -485,7 +485,9 @@ impl T3Store {
         let Some(connection) = self.connection.clone() else {
             return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
         };
-        cx.background_spawn(async move { Ok(connection.get_turn_item(&thread_id, &item_id).await?) })
+        cx.background_spawn(
+            async move { Ok(connection.get_turn_item(&thread_id, &item_id).await?) },
+        )
     }
 
     pub fn upload_attachment(
@@ -513,7 +515,9 @@ impl T3Store {
             return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
         };
         gpui_tokio::Tokio::spawn_result(cx, async move {
-            connection.download_attachment(&attachment_id, &name, &mime_type).await
+            connection
+                .download_attachment(&attachment_id, &name, &mime_type)
+                .await
         })
     }
 

@@ -193,6 +193,7 @@ impl Connection {
             name: name.to_string(),
             mime_type,
             size_bytes,
+            other: Default::default(),
         })
     }
 

@@ -36,7 +36,11 @@ fn read_tabs(workspace_id: WorkspaceId, cx: &App) -> BTreeMap<u64, String> {
         .unwrap_or_default()
 }
 
-fn write_tabs(workspace_id: WorkspaceId, tabs: BTreeMap<u64, String>, cx: &App) -> Task<Result<()>> {
+fn write_tabs(
+    workspace_id: WorkspaceId,
+    tabs: BTreeMap<u64, String>,
+    cx: &App,
+) -> Task<Result<()>> {
     let db = KeyValueStore::global(cx);
     let key = tabs_key(workspace_id);
     cx.background_spawn(async move {
@@ -87,7 +91,11 @@ pub fn move_to_panel(
 }
 
 /// The tab showing `thread_id`, if one is open.
-pub fn tab_for_thread(workspace: &Workspace, thread_id: &str, cx: &App) -> Option<Entity<ThreadView>> {
+pub fn tab_for_thread(
+    workspace: &Workspace,
+    thread_id: &str,
+    cx: &App,
+) -> Option<Entity<ThreadView>> {
     workspace
         .items_of_type::<ThreadView>(cx)
         .find(|view| view.read(cx).thread_id() == Some(thread_id))
@@ -107,7 +115,12 @@ impl Item for ThreadView {
                     .color(params.text_color()),
             )
             .when(waiting, |this| {
-                this.child(div().size(px(6.)).rounded_full().bg(cx.theme().colors().text_accent))
+                this.child(
+                    div()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(cx.theme().colors().text_accent),
+                )
             })
             .when(!waiting && working, |this| {
                 this.child(
@@ -119,7 +132,9 @@ impl Item for ThreadView {
                         .with_animation(
                             "t3-tab-working",
                             gpui::Animation::new(Duration::from_secs(2)).repeat(),
-                            |icon, delta| icon.with_transformation(Transformation::rotate(percentage(delta))),
+                            |icon, delta| {
+                                icon.with_transformation(Transformation::rotate(percentage(delta)))
+                            },
                         ),
                 )
             })
@@ -202,7 +217,9 @@ impl SerializableItem for ThreadView {
             .next()
             .map(|worktree| worktree.read(cx).abs_path().to_path_buf());
         let Some(root) = root else {
-            return Task::ready(Err(anyhow::anyhow!("the workspace has no folder for this thread")));
+            return Task::ready(Err(anyhow::anyhow!(
+                "the workspace has no folder for this thread"
+            )));
         };
         let languages = match workspace
             .upgrade()

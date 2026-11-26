@@ -93,23 +93,23 @@ pub fn option_value(selection: &ModelSelection, option: &OptionDescriptor) -> Op
 
 pub fn is_fast(selection: &ModelSelection, model: &ProviderModel) -> bool {
     fast_toggle(model).is_some_and(|toggle| {
-        let current = selection
-            .option(&toggle.id)
-            .cloned()
-            .or_else(|| {
-                model
-                    .options()
-                    .iter()
-                    .find(|option| option.id == toggle.id)
-                    .and_then(OptionDescriptor::default_value)
-            });
+        let current = selection.option(&toggle.id).cloned().or_else(|| {
+            model
+                .options()
+                .iter()
+                .find(|option| option.id == toggle.id)
+                .and_then(OptionDescriptor::default_value)
+        });
         current.as_ref() == Some(&toggle.on)
     })
 }
 
 /// The label of the chosen reasoning level, such as "Medium".
 pub fn reasoning_label(selection: &ModelSelection, model: &ProviderModel) -> Option<String> {
-    let option = model.options().iter().find(|option| option.is_reasoning())?;
+    let option = model
+        .options()
+        .iter()
+        .find(|option| option.is_reasoning())?;
     let value = option_value(selection, option)?;
     let value = value.as_str()?;
     option
@@ -192,7 +192,13 @@ impl ModelPicker {
         cx.notify();
     }
 
-    fn pick_model(&mut self, provider: &ProviderInfo, model: &ProviderModel, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_model(
+        &mut self,
+        provider: &ProviderInfo,
+        model: &ProviderModel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let selection = ModelSelection {
             instance_id: provider.instance_id.clone(),
             model: model.slug.clone(),
@@ -207,7 +213,11 @@ impl ModelPicker {
         self.change(selection, window, cx);
     }
 
-    fn render_providers(&self, providers: &[ProviderInfo], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_providers(
+        &self,
+        providers: &[ProviderInfo],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let colors = cx.theme().colors();
         v_flex()
             .w(px(PROVIDER_COLUMN))
@@ -222,7 +232,10 @@ impl ModelPicker {
                 let selected = provider.instance_id == self.provider;
                 let instance = provider.instance_id.clone();
                 div()
-                    .id(SharedString::from(format!("t3-provider-{}", provider.instance_id)))
+                    .id(SharedString::from(format!(
+                        "t3-provider-{}",
+                        provider.instance_id
+                    )))
                     .size(px(32.))
                     .flex()
                     .items_center()
@@ -232,15 +245,13 @@ impl ModelPicker {
                     .when(selected, |this| this.bg(ink(0.08, cx)))
                     .hover(|style| style.bg(ink(0.06, cx)))
                     .tooltip(ui::Tooltip::text(provider.display_name.clone()))
-                    .child(
-                        icon(provider_icon(&provider.driver), 16.).text_color(
-                            provider_color(&provider.driver).unwrap_or(if selected {
-                                colors.text
-                            } else {
-                                colors.text_muted
-                            }),
-                        ),
-                    )
+                    .child(icon(provider_icon(&provider.driver), 16.).text_color(
+                        provider_color(&provider.driver).unwrap_or(if selected {
+                            colors.text
+                        } else {
+                            colors.text_muted
+                        }),
+                    ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.provider = instance.clone();
                         cx.notify();
@@ -248,7 +259,11 @@ impl ModelPicker {
             }))
     }
 
-    fn render_models(&self, providers: &[ProviderInfo], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_models(
+        &self,
+        providers: &[ProviderInfo],
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let colors = cx.theme().colors();
         let query = self.search.read(cx).text(cx).trim().to_lowercase();
         let provider = providers
@@ -262,7 +277,8 @@ impl ModelPicker {
         // A legacy model stays listed only while it is the current choice, so the selection
         // never vanishes from its own picker.
         models.retain(|model| {
-            let current = self.selection.instance_id == self.provider && self.selection.model == model.slug;
+            let current =
+                self.selection.instance_id == self.provider && self.selection.model == model.slug;
             (!model.is_legacy || current)
                 && (query.is_empty()
                     || model.name.to_lowercase().contains(&query)
@@ -278,7 +294,10 @@ impl ModelPicker {
                         && self.selection.model == model.slug;
                     let picked = (provider.clone(), model.clone());
                     h_flex()
-                        .id(SharedString::from(format!("t3-model-{}-{}", provider.instance_id, model.slug)))
+                        .id(SharedString::from(format!(
+                            "t3-model-{}-{}",
+                            provider.instance_id, model.slug
+                        )))
                         .h(px(ROW_HEIGHT))
                         .px(px(8.))
                         .gap(px(8.))
@@ -341,7 +360,11 @@ impl ModelPicker {
             )
     }
 
-    fn render_options(&self, model: Option<&ProviderModel>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_options(
+        &self,
+        model: Option<&ProviderModel>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let colors = cx.theme().colors();
         let fast = model.and_then(fast_toggle);
         let options = model
@@ -386,11 +409,15 @@ impl ModelPicker {
             v_flex()
                 .child(header)
                 .children(option.options.iter().map(|choice| {
-                    let selected = current.as_ref().and_then(Value::as_str) == Some(choice.id.as_str());
+                    let selected =
+                        current.as_ref().and_then(Value::as_str) == Some(choice.id.as_str());
                     let id = option.id.clone();
                     let value = Value::String(choice.id.clone());
                     h_flex()
-                        .id(SharedString::from(format!("t3-option-{}-{}", option.id, choice.id)))
+                        .id(SharedString::from(format!(
+                            "t3-option-{}-{}",
+                            option.id, choice.id
+                        )))
                         .h(px(ROW_HEIGHT))
                         .px(px(8.))
                         .gap(px(8.))
@@ -398,7 +425,12 @@ impl ModelPicker {
                         .cursor_pointer()
                         .when(selected, |this| this.bg(ink(0.06, cx)))
                         .hover(|style| style.bg(ink(0.08, cx)))
-                        .child(div().flex_1().text_color(colors.text).child(choice.label.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(colors.text)
+                                .child(choice.label.clone()),
+                        )
                         .when(selected, |this| {
                             this.child(icon(IconName::Check, 13.).text_color(colors.text_muted))
                         })
@@ -430,10 +462,18 @@ impl ModelPicker {
             })
     }
 
-    fn render_footer(&self, model: Option<&ProviderModel>, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_footer(
+        &self,
+        model: Option<&ProviderModel>,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let fast = model.and_then(fast_toggle)?;
         let on = model.is_some_and(|model| is_fast(&self.selection, model));
-        let segment = |id: &'static str, label: SharedString, selected: bool, value: Value, fast_icon: bool| {
+        let segment = |id: &'static str,
+                       label: SharedString,
+                       selected: bool,
+                       value: Value,
+                       fast_icon: bool| {
             let option = fast.id.clone();
             h_flex()
                 .id(id)
@@ -451,11 +491,13 @@ impl ModelPicker {
                 .when(selected, |this| this.bg(ink(0.10, cx)))
                 .hover(|style| style.bg(ink(0.06, cx)))
                 .when(fast_icon, |this| {
-                    this.child(icon(IconName::AgentFastFilled, 12.).text_color(if selected {
-                        accent(cx)
-                    } else {
-                        cx.theme().colors().text_muted
-                    }))
+                    this.child(
+                        icon(IconName::AgentFastFilled, 12.).text_color(if selected {
+                            accent(cx)
+                        } else {
+                            cx.theme().colors().text_muted
+                        }),
+                    )
                 })
                 .child(label)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
@@ -474,8 +516,20 @@ impl ModelPicker {
                         .gap(px(2.))
                         .rounded(px(8.))
                         .bg(ink(0.04, cx))
-                        .child(segment("t3-speed-standard", t!("Standard"), !on, fast.off.clone(), false))
-                        .child(segment("t3-speed-fast", t!("Fast"), on, fast.on.clone(), true)),
+                        .child(segment(
+                            "t3-speed-standard",
+                            t!("Standard"),
+                            !on,
+                            fast.off.clone(),
+                            false,
+                        ))
+                        .child(segment(
+                            "t3-speed-fast",
+                            t!("Fast"),
+                            on,
+                            fast.on.clone(),
+                            true,
+                        )),
                 ),
         )
     }
@@ -505,7 +559,9 @@ impl Render for ModelPicker {
             .filter(|provider| provider.is_ready())
             .cloned()
             .collect::<Vec<_>>();
-        if !providers.iter().any(|provider| provider.instance_id == self.provider)
+        if !providers
+            .iter()
+            .any(|provider| provider.instance_id == self.provider)
             && let Some(first) = providers.first()
         {
             self.provider = first.instance_id.clone();
@@ -597,7 +653,12 @@ impl Focusable for PermissionPicker {
 }
 
 impl PermissionPicker {
-    pub fn new(mode: String, provider: Option<&ProviderInfo>, on_change: OnMode, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        mode: String,
+        provider: Option<&ProviderInfo>,
+        on_change: OnMode,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let supported = RUNTIME_MODES
             .iter()
             .map(|(id, ..)| *id)
@@ -667,11 +728,13 @@ impl Render for PermissionPicker {
                             .when(enabled, |this| {
                                 this.cursor_pointer()
                                     .hover(|style| style.bg(ink(0.07, cx)))
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                        this.mode = id.to_string();
-                                        (this.on_change)(id, window, cx);
-                                        cx.notify();
-                                    }))
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, window, cx| {
+                                            this.mode = id.to_string();
+                                            (this.on_change)(id, window, cx);
+                                            cx.notify();
+                                        },
+                                    ))
                             })
                             .tooltip(ui::Tooltip::text(i18n::translate(label)))
                             .child(icon(*mode_icon, 14.).text_color(if selected {
@@ -684,7 +747,11 @@ impl Render for PermissionPicker {
             .child(
                 v_flex()
                     .gap(px(2.))
-                    .child(div().text_color(colors.text).child(i18n::translate(current.2)))
+                    .child(
+                        div()
+                            .text_color(colors.text)
+                            .child(i18n::translate(current.2)),
+                    )
                     .child(
                         div()
                             .text_size(ui(12.))

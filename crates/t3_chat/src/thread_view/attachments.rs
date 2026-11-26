@@ -5,8 +5,8 @@ use super::{AttachmentSource, PendingAttachment, ThreadView};
 use crate::style::{hairline, icon, ink, ui};
 use file_icons::FileIcons;
 use gpui::{
-    AnyElement, App, ClickEvent, ClipboardEntry, Context, ImageFormat, ObjectFit, PathPromptOptions,
-    SharedString, Window, img,
+    AnyElement, App, ClickEvent, ClipboardEntry, Context, ImageFormat, ObjectFit,
+    PathPromptOptions, SharedString, Window, img,
 };
 use i18n::t;
 use serde_json::Value;
@@ -38,15 +38,24 @@ impl ThreadView {
     pub(super) fn attach_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         for path in paths {
             if self.attachments.len() >= MAX_ATTACHMENTS {
-                self.error = Some(t!("A message can carry up to {count} files.", count = MAX_ATTACHMENTS));
+                self.error = Some(t!(
+                    "A message can carry up to {count} files.",
+                    count = MAX_ATTACHMENTS
+                ));
                 break;
             }
-            let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+            let Some(name) = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+            else {
                 continue;
             };
             match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_dir() => {
-                    self.error = Some(t!("{name} is a folder; mention it with @ instead.", name = name));
+                    self.error = Some(t!(
+                        "{name} is a folder; mention it with @ instead.",
+                        name = name
+                    ));
                     continue;
                 }
                 Ok(metadata) if metadata.len() > MAX_FILE_BYTES => {
@@ -84,10 +93,16 @@ impl ThreadView {
             prompt: Some(t!("Attach")),
         });
         cx.spawn_in(window, async move |this, cx| {
-            let Some(paths) = picked.await.ok().and_then(|result| result.log_err()).flatten() else {
+            let Some(paths) = picked
+                .await
+                .ok()
+                .and_then(|result| result.log_err())
+                .flatten()
+            else {
                 return;
             };
-            this.update(cx, |this, cx| this.attach_paths(paths, cx)).log_err();
+            this.update(cx, |this, cx| this.attach_paths(paths, cx))
+                .log_err();
         })
         .detach();
     }
@@ -139,79 +154,109 @@ impl ThreadView {
                 .gap(px(6.))
                 .px(px(12.))
                 .pt(px(10.))
-                .children(self.attachments.iter().enumerate().map(|(index, attachment)| {
-                    let preview = match (&attachment.source, attachment.is_image) {
-                        (AttachmentSource::Path(path), true) => img(path.clone())
-                            .size(px(THUMB_SIZE - 2.))
-                            .rounded(px(7.))
-                            .object_fit(ObjectFit::Cover)
-                            .into_any_element(),
-                        (AttachmentSource::Clipboard(image), _) => img(image.clone())
-                            .size(px(THUMB_SIZE - 2.))
-                            .rounded(px(7.))
-                            .object_fit(ObjectFit::Cover)
-                            .into_any_element(),
-                        (AttachmentSource::Path(path), false) => {
-                            file_icon(path, cx).size(IconSize::Medium).into_any_element()
-                        }
-                    };
-                    let group: SharedString = format!("t3-attachment-{index}").into();
-                    h_flex()
-                        .group(group.clone())
-                        .relative()
-                        .h(px(THUMB_SIZE))
-                        .max_w(px(220.))
-                        .gap(px(8.))
-                        .pr(px(10.))
-                        .rounded(px(8.))
-                        .border_1()
-                        .border_color(hairline(0.10, cx))
-                        .bg(ink(0.03, cx))
-                        .child(
-                            div()
-                                .size(px(THUMB_SIZE - 2.))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(7.))
-                                .overflow_hidden()
-                                .child(preview),
-                        )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(ui(12.))
-                                .text_color(colors.text_muted)
-                                .child(attachment.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("t3-remove-attachment-{index}")))
-                                .absolute()
-                                .top(px(-6.))
-                                .right(px(-6.))
-                                .size(px(18.))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded_full()
-                                .border_1()
-                                .border_color(colors.border)
-                                .bg(colors.elevated_surface_background)
-                                .cursor_pointer()
-                                .visible_on_hover(group)
-                                .tooltip(Tooltip::text(t!("Remove")))
-                                .child(icon(IconName::AgentClose, 10.).text_color(colors.text_muted))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    if index < this.attachments.len() {
-                                        this.attachments.remove(index);
+                .children(
+                    self.attachments
+                        .iter()
+                        .enumerate()
+                        .map(|(index, attachment)| {
+                            let preview = match (&attachment.source, attachment.is_image) {
+                                (AttachmentSource::Path(path), true) => img(path.clone())
+                                    .size(px(THUMB_SIZE - 2.))
+                                    .rounded(px(7.))
+                                    .object_fit(ObjectFit::Cover)
+                                    .into_any_element(),
+                                (AttachmentSource::Clipboard(image), _) => img(image.clone())
+                                    .size(px(THUMB_SIZE - 2.))
+                                    .rounded(px(7.))
+                                    .object_fit(ObjectFit::Cover)
+                                    .into_any_element(),
+                                (AttachmentSource::Path(path), false) => file_icon(path, cx)
+                                    .size(IconSize::Medium)
+                                    .into_any_element(),
+                                (AttachmentSource::Uploaded(uploaded), true) => {
+                                    match self.sent_images.get(&uploaded.id).cloned().flatten() {
+                                        Some(image) => img(image)
+                                            .size(px(THUMB_SIZE - 2.))
+                                            .rounded(px(7.))
+                                            .object_fit(ObjectFit::Cover)
+                                            .into_any_element(),
+                                        None => Icon::new(IconName::Image)
+                                            .size(IconSize::Medium)
+                                            .color(Color::Muted)
+                                            .into_any_element(),
                                     }
-                                    cx.notify();
-                                })),
-                        )
-                }))
+                                }
+                                (AttachmentSource::Uploaded(uploaded), false) => {
+                                    file_icon(&PathBuf::from(&uploaded.name), cx)
+                                        .size(IconSize::Medium)
+                                        .into_any_element()
+                                }
+                            };
+                            let group: SharedString = format!("t3-attachment-{index}").into();
+                            h_flex()
+                                .group(group.clone())
+                                .relative()
+                                .h(px(THUMB_SIZE))
+                                .max_w(px(220.))
+                                .gap(px(8.))
+                                .pr(px(10.))
+                                .rounded(px(8.))
+                                .border_1()
+                                .border_color(hairline(0.10, cx))
+                                .bg(ink(0.03, cx))
+                                .child(
+                                    div()
+                                        .size(px(THUMB_SIZE - 2.))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded(px(7.))
+                                        .overflow_hidden()
+                                        .child(preview),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(ui(12.))
+                                        .text_color(colors.text_muted)
+                                        .child(attachment.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "t3-remove-attachment-{index}"
+                                        )))
+                                        .absolute()
+                                        .top(px(-6.))
+                                        .right(px(-6.))
+                                        .size(px(18.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .border_1()
+                                        .border_color(colors.border)
+                                        .bg(colors.elevated_surface_background)
+                                        .cursor_pointer()
+                                        .visible_on_hover(group)
+                                        .tooltip(Tooltip::text(t!("Remove")))
+                                        .child(
+                                            icon(IconName::AgentClose, 10.)
+                                                .text_color(colors.text_muted),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _, cx| {
+                                                if index < this.attachments.len() {
+                                                    this.attachments.remove(index);
+                                                }
+                                                cx.notify();
+                                            },
+                                        )),
+                                )
+                        }),
+                )
                 .into_any_element(),
         )
     }
@@ -219,7 +264,7 @@ impl ThreadView {
     /// Starts downloading the images of sent messages that are not cached yet. `None` in the cache
     /// marks a download in flight or failed, so a missing image is retried only after a reconnect.
     pub(super) fn fetch_sent_images(&mut self, cx: &mut Context<Self>) {
-        let wanted = self
+        let sent = self
             .items
             .iter()
             .filter_map(|item| item.fields.get("attachments")?.as_array())
@@ -228,15 +273,35 @@ impl ThreadView {
             .filter_map(|attachment| {
                 let id = attachment.get("id").and_then(Value::as_str)?;
                 let name = attachment.get("name").and_then(Value::as_str).unwrap_or(id);
-                let mime_type = attachment.get("mimeType").and_then(Value::as_str).unwrap_or("image/png");
+                let mime_type = attachment
+                    .get("mimeType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("image/png");
                 Some((id.to_string(), name.to_string(), mime_type.to_string()))
-            })
+            });
+        // The files of a queued message being edited are not in the timeline yet.
+        let editing = self
+            .attachments
+            .iter()
+            .filter_map(|attachment| match &attachment.source {
+                AttachmentSource::Uploaded(uploaded) if uploaded.kind == "image" => Some((
+                    uploaded.id.clone(),
+                    uploaded.name.clone(),
+                    uploaded.mime_type.clone(),
+                )),
+                _ => None,
+            });
+        let wanted = sent
+            .chain(editing)
             .filter(|(id, _, _)| !self.sent_images.contains_key(id))
             .collect::<Vec<_>>();
         for (id, name, mime_type) in wanted {
             self.sent_images.insert(id.clone(), None);
             let format = ImageFormat::from_mime_type(&mime_type).unwrap_or(ImageFormat::Png);
-            let download = self.store.read(cx).download_attachment(id.clone(), name, mime_type, cx);
+            let download = self
+                .store
+                .read(cx)
+                .download_attachment(id.clone(), name, mime_type, cx);
             self.fetch_tasks.insert(
                 format!("sent-image-{id}"),
                 cx.spawn(async move |this, cx| {
@@ -245,8 +310,10 @@ impl ThreadView {
                         this.fetch_tasks.remove(&format!("sent-image-{id}"));
                         match result {
                             Ok(bytes) => {
-                                this.sent_images
-                                    .insert(id, Some(Arc::new(gpui::Image::from_bytes(format, bytes))));
+                                this.sent_images.insert(
+                                    id,
+                                    Some(Arc::new(gpui::Image::from_bytes(format, bytes))),
+                                );
                             }
                             Err(error) => log::warn!("downloading a sent image failed: {error:#}"),
                         }
@@ -309,7 +376,9 @@ impl ThreadView {
                             .text_size(ui(12.))
                             .text_color(colors.text_muted)
                             .child(if is_image {
-                                Icon::new(IconName::Image).size(IconSize::Small).color(Color::Muted)
+                                Icon::new(IconName::Image)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted)
                             } else {
                                 file_icon(&PathBuf::from(&name), cx)
                             })

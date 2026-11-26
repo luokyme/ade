@@ -8,8 +8,9 @@ use crate::{
 use anyhow::Result;
 use db::kvp::KeyValueStore;
 use gpui::{
-    Action, App, AsyncWindowContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, Pixels, ScrollWheelEvent, SharedString, Subscription, Task, WeakEntity, Window,
+    Action, App, AsyncWindowContext, ClickEvent, ClipboardItem, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, Pixels, ScrollWheelEvent, SharedString, Subscription, Task, WeakEntity,
+    Window,
 };
 use i18n::{n, t};
 use language::LanguageRegistry;
@@ -19,7 +20,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use t3_client::{ModelSelection, protocol::ThreadShell};
+use t3_client::{
+    ModelSelection,
+    protocol::{ThreadShell, commands},
+};
 use ui::{Tooltip, prelude::*};
 use util::ResultExt as _;
 use workspace::{
@@ -28,6 +32,8 @@ use workspace::{
 };
 
 const T3_PANEL_KEY: &str = "T3Panel";
+
+const COPIED_FEEDBACK: Duration = Duration::from_millis(1200);
 
 /// How far a two-finger swipe has to travel before it counts as going back.
 const SWIPE_BACK_DISTANCE: Pixels = px(120.);
@@ -87,6 +93,8 @@ pub struct T3Panel {
     view_subscription: Option<Subscription>,
     swipe_back: SwipeBack,
     error: Option<SharedString>,
+    copied_thread: Option<String>,
+    copied_reset: Option<Task<()>>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -111,7 +119,8 @@ impl T3Panel {
                 let mut panel = Self::new(workspace, project, languages, window, cx);
                 panel.workspace_id = workspace_id;
                 panel.restore_thread = restore_thread;
-                panel.try_restore(window, cx);
+                // Restoring reads the workspace, which is still being updated here.
+                cx.defer_in(window, |this, window, cx| this.try_restore(window, cx));
                 panel
             })
         })
@@ -146,6 +155,8 @@ impl T3Panel {
             view_subscription: None,
             swipe_back: SwipeBack::default(),
             error: None,
+            copied_thread: None,
+            copied_reset: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         }
@@ -161,10 +172,9 @@ impl T3Panel {
         if !matches!(store.status(), Status::Connected) || !has_snapshot {
             return;
         }
-        let in_tab = self
-            .workspace
-            .upgrade()
-            .is_some_and(|workspace| crate::tab::tab_for_thread(workspace.read(cx), thread_id, cx).is_some());
+        let in_tab = self.workspace.upgrade().is_some_and(|workspace| {
+            crate::tab::tab_for_thread(workspace.read(cx), thread_id, cx).is_some()
+        });
         let known = store.shell().threads.contains_key(thread_id) && !in_tab;
         let Some((project_id, root)) = self.t3_project(cx).filter(|_| known) else {
             self.restore_thread = None;
@@ -352,7 +362,12 @@ impl T3Panel {
     }
 
     /// Shows a thread that moved here from an editor tab.
-    pub fn show_view(&mut self, view: Entity<ThreadView>, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn show_view(
+        &mut self,
+        view: Entity<ThreadView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let thread_id = view.read(cx).thread_id().map(str::to_string);
         self.restore_thread = None;
         self.remember_open_thread(thread_id.as_deref(), cx);
@@ -401,6 +416,48 @@ impl T3Panel {
                 if let Err(error) = result {
                     this.error = Some(format!("{error:#}").into());
                 }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn set_thread_pinned(&mut self, thread_id: &str, pinned: bool, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let command = if pinned {
+            commands::pin_thread(thread_id, store.shell().top_pin_order_key().as_deref())
+        } else {
+            commands::unpin_thread(thread_id)
+        };
+        let task = store.dispatch(command, cx);
+        self.error = None;
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = task.await {
+                this.update(cx, |this, cx| {
+                    this.error = Some(format!("{error:#}").into());
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Copies just the title and id: a new thread already knows its own project, and the id is
+    /// what lets an agent look this thread up.
+    fn copy_thread_reference(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(thread) = self.store.read(cx).shell().threads.get(thread_id) else {
+            return;
+        };
+        let text = format!("{}\nthread id: {}", thread.title, thread.id);
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copied_thread = Some(thread_id.to_string());
+        self.copied_reset = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(COPIED_FEEDBACK).await;
+            this.update(cx, |this, cx| {
+                this.copied_thread = None;
                 cx.notify();
             })
             .ok();
@@ -566,14 +623,25 @@ impl T3Panel {
                 .into_any_element();
         }
         let now = chrono::Utc::now();
-        v_flex()
-            .gap_0p5()
-            .children(
-                threads
-                    .into_iter()
-                    .map(|thread| self.render_thread_row(thread, now, cx)),
-            )
-            .into_any_element()
+        let separator_color = cx.theme().colors().border_variant;
+        let mut rows = Vec::with_capacity(threads.len());
+        let mut previous_group = None;
+        for thread in threads {
+            let group = ThreadGroup::of(&thread, now);
+            if previous_group.is_some_and(|previous| previous != group) {
+                rows.push(
+                    div()
+                        .h(px(1.))
+                        .mx(px(10.))
+                        .my(px(4.))
+                        .bg(separator_color)
+                        .into_any_element(),
+                );
+            }
+            previous_group = Some(group);
+            rows.push(self.render_thread_row(thread, now, cx));
+        }
+        v_flex().gap_0p5().children(rows).into_any_element()
     }
 
     fn render_thread_row(
@@ -599,10 +667,13 @@ impl T3Panel {
         let agent_icon = provider_icon(driver.unwrap_or_default());
         let agent_color = provider_color(driver.unwrap_or_default()).unwrap_or(colors.text);
         let failed = thread.last_error.is_some() && thread.status == "failed";
+        let in_background = !thread.pending_background_tasks.is_empty();
         let (detail, detail_color): (SharedString, gpui::Hsla) = if thread.needs_attention() {
             (t!("Needs your input"), accent)
         } else if thread.is_working() {
             (t!("Working"), colors.text_muted)
+        } else if in_background {
+            (t!("Running in background"), colors.text_muted)
         } else if failed {
             (t!("Failed"), error)
         } else {
@@ -617,7 +688,7 @@ impl T3Panel {
                     .bg(accent)
                     .into_any_element(),
             )
-        } else if thread.is_working() {
+        } else if thread.is_working() || in_background {
             Some(style::spinning_icon(
                 SharedString::from(format!("t3-thread-spinner-{}", thread.id)),
                 IconName::LoadCircle,
@@ -636,6 +707,16 @@ impl T3Panel {
         let thread_id = thread.id.clone();
         let hover_group = "t3-thread-row";
         let open_in_editor = t!("Open in Editor");
+        let pinned = thread.pinned_at.is_some();
+        let pin_label = if pinned {
+            t!("Unpin")
+        } else {
+            t!("Pin to top")
+        };
+        let pin_thread_id = thread.id.clone();
+        let copy_thread_id = thread.id.clone();
+        let copied = self.copied_thread.as_deref() == Some(thread.id.as_str());
+        let copy_label = t!("Copy thread reference");
         h_flex()
             .id(SharedString::from(format!("t3-thread-{}", thread.id)))
             .group(hover_group)
@@ -664,30 +745,113 @@ impl T3Panel {
                 h_flex()
                     .relative()
                     .h_full()
-                    .min_w(ButtonSize::Default.rems())
+                    .min_w(ButtonSize::Default.rems() * 3.)
                     .flex_none()
                     .justify_end()
                     .child(
-                        div()
+                        h_flex()
+                            .gap(px(4.))
                             .group_hover(hover_group, |style| style.invisible())
-                            .text_size(style::ui(11.))
-                            .text_color(detail_color)
-                            .child(detail),
+                            .when(pinned, |this| {
+                                this.child(
+                                    Icon::new(IconName::Pin)
+                                        .size(IconSize::XSmall)
+                                        .color(Color::Muted),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .text_size(style::ui(11.))
+                                    .text_color(detail_color)
+                                    .child(detail),
+                            ),
                     )
                     .child(
-                        h_flex().absolute().inset_0().justify_end().child(
-                            IconButton::new("t3-open-thread-in-editor", IconName::GenericMaximize)
+                        h_flex()
+                            .absolute()
+                            .inset_0()
+                            .justify_end()
+                            .child(
+                                IconButton::new(
+                                    "t3-copy-thread-reference",
+                                    if copied {
+                                        IconName::Check
+                                    } else {
+                                        IconName::Link
+                                    },
+                                )
+                                .icon_size(IconSize::Small)
+                                .aria_label(copy_label.clone())
+                                .tooltip(Tooltip::text(copy_label))
+                                .visible_on_hover(hover_group)
+                                .on_click(cx.listener(
+                                    move |this, _: &ClickEvent, _, cx| {
+                                        this.copy_thread_reference(&copy_thread_id, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                IconButton::new(
+                                    "t3-pin-thread",
+                                    if pinned {
+                                        IconName::Unpin
+                                    } else {
+                                        IconName::Pin
+                                    },
+                                )
+                                .icon_size(IconSize::Small)
+                                .aria_label(pin_label.clone())
+                                .tooltip(Tooltip::text(pin_label))
+                                .visible_on_hover(hover_group)
+                                .on_click(cx.listener(
+                                    move |this, _: &ClickEvent, _, cx| {
+                                        this.set_thread_pinned(&pin_thread_id, !pinned, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                IconButton::new(
+                                    "t3-open-thread-in-editor",
+                                    IconName::GenericMaximize,
+                                )
                                 .icon_size(IconSize::Small)
                                 .aria_label(open_in_editor.clone())
                                 .tooltip(Tooltip::text(open_in_editor))
                                 .visible_on_hover(hover_group)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                    this.open_thread(thread.id.clone(), true, window, cx)
-                                })),
-                        ),
+                                .on_click(cx.listener(
+                                    move |this, _: &ClickEvent, window, cx| {
+                                        this.open_thread(thread.id.clone(), true, window, cx)
+                                    },
+                                )),
+                            ),
                     ),
             )
             .into_any_element()
+    }
+}
+
+/// Sections of the thread list; a separator is drawn wherever the section changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThreadGroup {
+    Pinned,
+    Recent,
+    Older,
+}
+
+impl ThreadGroup {
+    fn of(thread: &ThreadShell, now: chrono::DateTime<chrono::Utc>) -> Self {
+        if thread.pinned_at.is_some() {
+            return Self::Pinned;
+        }
+        // The list is ordered by when the user last wrote, so the cut-off has to use that too.
+        let idle = chrono::DateTime::parse_from_rfc3339(thread.last_activity_key())
+            .map(|time| now - time.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Duration::zero());
+        if thread.is_working() || idle < chrono::Duration::hours(24) {
+            Self::Recent
+        } else {
+            Self::Older
+        }
     }
 }
 

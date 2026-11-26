@@ -1,4 +1,5 @@
 mod attachments;
+mod background_tasks;
 mod completion;
 
 use crate::{
@@ -12,37 +13,37 @@ use crate::{
     store::{T3Store, usage_harness},
     style::{
         SPACE_LG, SPACE_MD, SPACE_SM, TOOL_LINE_HEIGHT, TOOL_TEXT_SIZE, accent, code_font,
-        composer_surface,
-        flavour_seed, flavour_word, format_elapsed, gradient_spinner, hairline, icon, icon_button,
-        ink, mix, page, shimmer_title, spinning_icon, text_faint, ui, wash,
+        composer_surface, flavour_seed, flavour_word, format_elapsed, gradient_spinner, hairline,
+        icon, icon_button, ink, mix, page, shimmer_title, spinning_icon, text_faint, ui, wash,
     },
     transcript::{
-        Class, Row, Tally, Turn, clip_lines, classify, describe, display_path, group_summary,
+        Class, Row, Tally, Turn, classify, clip_lines, describe, display_path, group_summary,
         group_turns, is_workspace_setup, notice_text, single_line, strip_ansi, todo_progress,
         turn_rows, unwrap_shell, value_text,
     },
 };
 use agent_harness::HarnessId;
-use editor::{Editor, EditorEvent};
+use editor::{Editor, EditorEvent, items::open_resolved_target};
 use gpui::ExternalPaths;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ClickEvent, ClipboardItem, Context, ElementId,
     Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyContext, ScrollHandle,
-    SharedString, StyleRefinement, Subscription, Task, TextStyleRefinement,
-    UnderlineStyle, WeakEntity, Window, ease_out_quint, point,
+    SharedString, StyleRefinement, Subscription, Task, TextStyleRefinement, UnderlineStyle,
+    WeakEntity, Window, ease_out_quint, point,
 };
 use i18n::t;
 use language::LanguageRegistry;
 use markdown::{
     CodeBlockRenderer, CopyButtonVisibility, HeadingLevelStyles, Markdown, MarkdownElement,
     MarkdownFont, MarkdownOptions, MarkdownStyle, WrapButtonVisibility,
+    parser::{MarkdownEvent, MarkdownTag},
 };
 use serde_json::{Map, Value};
 use std::{
     collections::{HashMap, HashSet},
-    rc::Rc,
     ops::Range,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
     time::Duration,
 };
@@ -53,14 +54,25 @@ use t3_client::{
 };
 use theme::ActiveTheme as _;
 use ui::{ButtonLike, PopoverMenu, Tooltip, prelude::*};
-use util::ResultExt as _;
-use workspace::Workspace;
+use util::{
+    ResultExt as _,
+    markdown::{source_position_from_fragment, split_local_url_fragment},
+    paths::PathWithPosition,
+};
+use workspace::{
+    Workspace,
+    path_link::{PathMatching, resolve_open_target},
+};
 
 /// How close to the end the view must be to keep following new output.
 const FOLLOW_THRESHOLD: f32 = 32.;
 const SCROLL_BUTTON_THRESHOLD: f32 = 240.;
 const DEFAULT_RUNTIME_MODE: &str = "full-access";
-const SECONDARY_MODIFIER: &str = if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" };
+const SECONDARY_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
 const DEFAULT_INTERACTION_MODE: &str = "default";
 const GUTTER: f32 = SPACE_LG;
 const MD_BLOCK_GAP: f32 = 12.;
@@ -122,6 +134,7 @@ pub struct ThreadView {
     file_search: Task<()>,
     /// Files waiting to go with the next message.
     attachments: Vec<PendingAttachment>,
+    queued_edit: Option<QueuedEdit>,
     /// Images from sent messages, by attachment id, downloaded once from the server.
     sent_images: HashMap<String, Option<Arc<gpui::Image>>>,
     /// The user message whose "edit from here" is waiting for confirmation.
@@ -132,6 +145,7 @@ pub struct ThreadView {
     answers: HashMap<String, HashMap<String, Vec<String>>>,
     answer_editors: HashMap<String, Entity<Editor>>,
     todos_expanded: bool,
+    background_stop: Option<background_tasks::BackgroundStop>,
     tick: Option<Task<()>>,
     scroll: ScrollHandle,
     /// Keeps the newest output in view until the user scrolls up, and again once they return.
@@ -160,6 +174,17 @@ impl Focusable for ThreadView {
 enum AttachmentSource {
     Path(PathBuf),
     Clipboard(Arc<gpui::Image>),
+    /// Already on the server, such as a file of a queued message being edited.
+    Uploaded(ChatAttachment),
+}
+
+/// A queued message loaded into the composer for editing, and the draft it set aside.
+struct QueuedEdit {
+    run_id: String,
+    original_text: String,
+    original_attachment_ids: Vec<String>,
+    set_aside_text: String,
+    set_aside_attachments: Vec<PendingAttachment>,
 }
 
 /// A file attached in the composer, uploaded when the message is sent.
@@ -296,6 +321,7 @@ impl ThreadView {
             dismissed_token: None,
             file_search: Task::ready(()),
             attachments: Vec::new(),
+            queued_edit: None,
             sent_images: HashMap::default(),
             confirm_rewind: None,
             fetch_tasks: HashMap::default(),
@@ -304,6 +330,7 @@ impl ThreadView {
             answers: HashMap::default(),
             answer_editors: HashMap::default(),
             todos_expanded: false,
+            background_stop: None,
             tick: None,
             scroll: ScrollHandle::new(),
             following: true,
@@ -317,7 +344,8 @@ impl ThreadView {
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
-        this.store.update(cx, |store, cx| store.ensure_connected(cx));
+        this.store
+            .update(cx, |store, cx| store.ensure_connected(cx));
         this.subscribe(cx);
         this.refresh_plan_usage(cx);
         this
@@ -341,9 +369,12 @@ impl ThreadView {
     }
 
     pub fn needs_input(&self, _: &App) -> bool {
-        self.state
-            .as_ref()
-            .is_some_and(|state| state.runtime_requests.iter().any(|request| request.is_pending()))
+        self.state.as_ref().is_some_and(|state| {
+            state
+                .runtime_requests
+                .iter()
+                .any(|request| request.is_pending())
+        })
     }
 
     pub fn provider_driver(&self, cx: &App) -> Option<String> {
@@ -450,7 +481,11 @@ impl ThreadView {
                     "proposed_plan" => item.str_field("markdown").unwrap_or(""),
                     _ => return None,
                 };
-                Some((item.id.clone(), item.kind == "user_message", text.to_string()))
+                Some((
+                    item.id.clone(),
+                    item.kind == "user_message",
+                    text.to_string(),
+                ))
             })
             .collect::<Vec<_>>();
         for (id, is_user, text) in sources {
@@ -535,6 +570,7 @@ impl ThreadView {
             return;
         }
         self.error = None;
+        let editing = self.queued_edit.as_ref().map(|edit| edit.run_id.clone());
         self.composer
             .update(cx, |composer, cx| composer.clear(window, cx));
         self.following = true;
@@ -543,6 +579,10 @@ impl ThreadView {
             let mut uploaded = Vec::with_capacity(pending.len());
             for attachment in &pending {
                 let bytes = match &attachment.source {
+                    AttachmentSource::Uploaded(attachment) => {
+                        uploaded.push(attachment.clone());
+                        continue;
+                    }
                     AttachmentSource::Clipboard(image) => Ok(image.bytes.clone()),
                     AttachmentSource::Path(path) => {
                         let path = path.clone();
@@ -574,7 +614,10 @@ impl ThreadView {
                     }
                 }
             }
-            let sent = this.update(cx, |this, cx| this.dispatch_message(&text, &uploaded, steer, cx));
+            let sent = this.update(cx, |this, cx| match editing.as_deref() {
+                Some(run_id) => this.save_queued_edit(run_id, &text, &uploaded, steer, cx),
+                None => this.dispatch_message(&text, &uploaded, steer, cx),
+            });
             let result = match sent {
                 Ok(task) => task.await,
                 Err(error) => Err(error),
@@ -587,7 +630,11 @@ impl ThreadView {
                         this.subscribe(cx);
                         cx.emit(ThreadViewEvent::Launched);
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        if editing.is_some() {
+                            this.end_queued_edit(window, cx);
+                        }
+                    }
                     Err(error) => this.restore_draft(&text, pending, error, window, cx),
                 }
                 cx.notify();
@@ -659,7 +706,173 @@ impl ThreadView {
         cx.notify();
     }
 
-    fn stop(&mut self, _: &Stop, _: &mut Window, cx: &mut Context<Self>) {
+    /// Saves the composer's text and files as the queued message's new content. With `steer`,
+    /// the message then goes into the current turn, as sending with steer would.
+    fn save_queued_edit(
+        &self,
+        run_id: &str,
+        text: &str,
+        attachments: &[ChatAttachment],
+        steer: bool,
+        cx: &App,
+    ) -> Task<anyhow::Result<Option<String>>> {
+        let Some(thread_id) = self.thread_id.clone() else {
+            return Task::ready(Err(anyhow::anyhow!(t!("This thread is not available."))));
+        };
+        let unchanged_files = self.queued_edit.as_ref().is_some_and(|edit| {
+            edit.original_attachment_ids
+                .iter()
+                .eq(attachments.iter().map(|attachment| &attachment.id))
+        });
+        // Leaving the files out keeps the queued ones as they are.
+        let attachments = (!unchanged_files).then_some(attachments);
+        let store = self.store.read(cx);
+        let saved = store.dispatch(
+            commands::edit_queued_run(&thread_id, run_id, text, attachments),
+            cx,
+        );
+        // Steering must wait for the save, or the old text would go into the turn.
+        let promote = self
+            .active_run_id()
+            .filter(|_| steer)
+            .map(|target| commands::promote_to_steer(&thread_id, run_id, &target));
+        let store = self.store.clone();
+        cx.spawn(async move |cx| {
+            saved.await?;
+            if let Some(command) = promote {
+                store
+                    .read_with(cx, |store, cx| store.dispatch(command, cx))
+                    .await?;
+            }
+            Ok(None)
+        })
+    }
+
+    /// Loads a queued message into the composer, setting the draft there aside until the edit
+    /// is saved or cancelled.
+    fn begin_queued_edit(
+        &mut self,
+        run_id: String,
+        text: String,
+        attachments: Vec<ChatAttachment>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.send_task.is_some() {
+            return;
+        }
+        let (set_aside_text, set_aside_attachments) = match self.queued_edit.take() {
+            Some(previous) => (previous.set_aside_text, previous.set_aside_attachments),
+            None => (
+                self.composer.read(cx).text(cx),
+                std::mem::take(&mut self.attachments),
+            ),
+        };
+        self.attachments = attachments
+            .iter()
+            .map(|attachment| PendingAttachment {
+                name: attachment.name.clone(),
+                is_image: attachment.kind == "image",
+                source: AttachmentSource::Uploaded(attachment.clone()),
+            })
+            .collect();
+        self.queued_edit = Some(QueuedEdit {
+            run_id,
+            original_text: text.clone(),
+            original_attachment_ids: attachments
+                .into_iter()
+                .map(|attachment| attachment.id)
+                .collect(),
+            set_aside_text,
+            set_aside_attachments,
+        });
+        self.error = None;
+        self.fetch_sent_images(cx);
+        self.composer.update(cx, |composer, cx| {
+            composer.set_text(text, window, cx);
+            composer.move_to_end(&editor::actions::MoveToEnd, window, cx);
+        });
+        window.focus(&self.composer.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Leaves editing and brings back the draft that was in the composer before.
+    fn end_queued_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.queued_edit.take() else {
+            return;
+        };
+        self.composer.update(cx, |composer, cx| {
+            composer.set_text(edit.set_aside_text, window, cx);
+            composer.move_to_end(&editor::actions::MoveToEnd, window, cx);
+        });
+        self.attachments = edit.set_aside_attachments;
+        cx.notify();
+    }
+
+    /// Ends the edit once its message is no longer queued, because the server rejects edits to
+    /// a run that started or was removed.
+    fn reconcile_queued_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = self.queued_edit.as_ref() else {
+            return;
+        };
+        if self.send_task.is_some() {
+            return;
+        }
+        let Some(state) = self.state.as_ref().filter(|state| state.has_snapshot()) else {
+            return;
+        };
+        if state
+            .queue()
+            .iter()
+            .any(|queued| queued.run.id == edit.run_id)
+        {
+            return;
+        }
+        let changed = self.composer.read(cx).text(cx) != edit.original_text
+            || !edit
+                .original_attachment_ids
+                .iter()
+                .eq(self
+                    .attachments
+                    .iter()
+                    .filter_map(|attachment| match &attachment.source {
+                        AttachmentSource::Uploaded(uploaded) => Some(&uploaded.id),
+                        _ => None,
+                    }))
+            || self
+                .attachments
+                .iter()
+                .any(|attachment| !matches!(attachment.source, AttachmentSource::Uploaded(_)));
+        if !changed {
+            self.end_queued_edit(window, cx);
+            return;
+        }
+        let nothing_set_aside =
+            edit.set_aside_text.trim().is_empty() && edit.set_aside_attachments.is_empty();
+        if nothing_set_aside {
+            // The edit stays in the composer and is sent as a new message from here on.
+            self.queued_edit = None;
+            self.error = Some(t!(
+                "The queued message is no longer queued. Your unsaved edit was kept in the composer."
+            ));
+        } else {
+            self.end_queued_edit(window, cx);
+            self.error = Some(t!(
+                "The queued message is no longer queued. Your unsaved edit was discarded."
+            ));
+        }
+        cx.notify();
+    }
+
+    fn stop(&mut self, _: &Stop, window: &mut Window, cx: &mut Context<Self>) {
+        if self.queued_edit.is_some() {
+            self.end_queued_edit(window, cx);
+            return;
+        }
+        self.interrupt(cx);
+    }
+
+    fn interrupt(&mut self, cx: &mut Context<Self>) {
         let (Some(thread_id), Some(run_id)) = (self.thread_id.clone(), self.active_run_id()) else {
             return;
         };
@@ -845,8 +1058,12 @@ impl ThreadView {
         self.full_items.get(&key).unwrap_or(item)
     }
 
+    fn needs_tick(&self, cx: &App) -> bool {
+        self.is_working() || self.has_background_tasks(cx)
+    }
+
     fn ensure_tick(&mut self, cx: &mut Context<Self>) {
-        if !self.is_working() {
+        if !self.needs_tick(cx) {
             self.tick = None;
             return;
         }
@@ -856,13 +1073,13 @@ impl ThreadView {
         self.tick = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                let working = this
+                let ticking = this
                     .update(cx, |this, cx| {
                         cx.notify();
-                        this.is_working()
+                        this.needs_tick(cx)
                     })
                     .unwrap_or(false);
-                if !working {
+                if !ticking {
                     break;
                 }
             }
@@ -966,7 +1183,12 @@ impl ThreadView {
         style
     }
 
-    fn markdown_element(&self, item_id: &str, style: MarkdownStyle, cx: &Context<Self>) -> Option<AnyElement> {
+    fn markdown_element(
+        &self,
+        item_id: &str,
+        style: MarkdownStyle,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
         let markdown = self.markdown.get(item_id)?.clone();
         let link_view = cx.entity().downgrade();
         Some(
@@ -990,8 +1212,44 @@ impl ThreadView {
             cx.open_url(url);
             return;
         }
-        let path = url.split('#').next().unwrap_or(url);
-        self.open_file(path, window, cx);
+        let (path, fragment) = split_local_url_fragment(url);
+        let mut target = path.to_string();
+        if PathWithPosition::parse_str(path).row.is_none()
+            && let Some((row, column)) = fragment
+                .and_then(|fragment| fragment.strip_prefix('L'))
+                .and_then(source_position_from_fragment)
+        {
+            target = format!("{target}:{}:{}", row + 1, column + 1);
+        }
+
+        let open_target = resolve_open_target(
+            &self.workspace,
+            PathMatching::Exact,
+            &target,
+            Some(&self.worktree_root()),
+            cx,
+        );
+        let workspace = self.workspace.clone();
+        let fallback_path = path.to_string();
+        let view = cx.entity().downgrade();
+        window
+            .spawn(cx, async move |cx| {
+                let opened = match open_target.await {
+                    Some(open_target) => open_resolved_target(&workspace, &open_target, cx)
+                        .await
+                        .log_err()
+                        .unwrap_or(false),
+                    None => false,
+                };
+                if !opened {
+                    cx.update(|window, cx| {
+                        view.update(cx, |this, cx| this.open_file(&fallback_path, window, cx))
+                            .log_err();
+                    })
+                    .log_err();
+                }
+            })
+            .detach();
     }
 
     fn render_user(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1011,6 +1269,7 @@ impl ThreadView {
             wash(0.08, cx)
         };
         let group: SharedString = format!("t3-user-{id}").into();
+        let fill_width = self.user_needs_full_width(&id, cx);
         let body = self
             .markdown_element(&id, Self::user_style(window, cx), cx)
             .unwrap_or_else(|| text.clone().into_any_element());
@@ -1028,6 +1287,7 @@ impl ThreadView {
                     .when(!has_text, |this| this.hidden())
                     .min_w_0()
                     .max_w(relative(0.88))
+                    .when(fill_width, |this| this.w(relative(0.88)))
                     .px(px(14.))
                     .py(px(9.))
                     .rounded(px(16.))
@@ -1099,6 +1359,33 @@ impl ThreadView {
             .into_any_element()
     }
 
+    /// The bubble shrinks to its content, but Markdown lists, code blocks and
+    /// tables report no intrinsic width (list content is `w_0` so it wraps), so
+    /// without a definite width they collapse to one character per line.
+    fn user_needs_full_width(&self, item_id: &str, cx: &App) -> bool {
+        let Some(markdown) = self.markdown.get(item_id) else {
+            return false;
+        };
+        markdown
+            .read(cx)
+            .parsed_markdown()
+            .events()
+            .iter()
+            .any(|(_, event)| {
+                matches!(
+                    event,
+                    MarkdownEvent::Start(
+                        MarkdownTag::List(_)
+                            | MarkdownTag::CodeBlock { .. }
+                            | MarkdownTag::Table(_)
+                            | MarkdownTag::BlockQuote(_)
+                            | MarkdownTag::HtmlBlock
+                            | MarkdownTag::FootnoteDefinition(_)
+                    )
+                )
+            })
+    }
+
     fn hover_strip(
         &self,
         strip: gpui::Div,
@@ -1134,10 +1421,12 @@ impl ThreadView {
                         cx,
                     )
                     .tooltip(Tooltip::text(t!("Copy message")))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        cx.stop_propagation();
-                        this.copy(key.clone(), text.clone(), cx)
-                    })),
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.copy(key.clone(), text.clone(), cx)
+                        },
+                    )),
                 )
             })
     }
@@ -1185,13 +1474,15 @@ impl ThreadView {
             Button::new(SharedString::from(format!("{id}-{}", item.id)), label)
                 .style(style)
                 .size(ButtonSize::Medium)
-                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| match restore {
-                    Some(restore_files) => this.rewind(&item, restore_files, window, cx),
-                    None => {
-                        this.confirm_rewind = None;
-                        cx.notify();
-                    }
-                }))
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, window, cx| match restore {
+                        Some(restore_files) => this.rewind(&item, restore_files, window, cx),
+                        None => {
+                            this.confirm_rewind = None;
+                            cx.notify();
+                        }
+                    }),
+                )
         };
         v_flex()
             .w_full()
@@ -1228,10 +1519,18 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn rewind(&mut self, item: &TurnItem, restore_files: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn rewind(
+        &mut self,
+        item: &TurnItem,
+        restore_files: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.confirm_rewind = None;
         if self.is_working() {
-            self.error = Some(t!("Interrupt the current turn before reverting checkpoints."));
+            self.error = Some(t!(
+                "Interrupt the current turn before reverting checkpoints."
+            ));
             cx.notify();
             return;
         }
@@ -1260,8 +1559,9 @@ impl ThreadView {
                 match result {
                     Ok(_) => {
                         if this.composer.read(cx).text(cx).trim().is_empty() {
-                            this.composer
-                                .update(cx, |composer, cx| composer.set_text(text.clone(), window, cx));
+                            this.composer.update(cx, |composer, cx| {
+                                composer.set_text(text.clone(), window, cx)
+                            });
                         }
                     }
                     Err(error) => this.error = Some(format!("{error:#}").into()),
@@ -1302,11 +1602,19 @@ impl ThreadView {
         let thought = thought.and_then(|thought| self.items.get(thought));
         let entry = thought.map(|thought| {
             let group_key = format!("t3-group-{}", thought.id);
-            let open = self.group_overrides.get(&group_key).copied().unwrap_or(false);
+            let open = self
+                .group_overrides
+                .get(&group_key)
+                .copied()
+                .unwrap_or(false);
             let button = icon_button(
                 ElementId::Name(format!("{group_key}-entry").into()),
                 IconName::AgentChatRoundLine,
-                if open { cx.theme().colors().text } else { text_faint(cx) },
+                if open {
+                    cx.theme().colors().text
+                } else {
+                    text_faint(cx)
+                },
                 cx,
             )
             .tooltip(Tooltip::text(t!("Thought process")))
@@ -1323,15 +1631,11 @@ impl ThreadView {
             })
             .flatten()
         });
-        let reply = div()
-            .flex_1()
-            .min_w_0()
-            .child(body)
-            .with_animation(
-                ElementId::Name(format!("t3-reply-fade-{}", item.id).into()),
-                Animation::new(FADE_IN).with_easing(ease_out_quint()),
-                |this, delta| this.opacity(delta),
-            );
+        let reply = div().flex_1().min_w_0().child(body).with_animation(
+            ElementId::Name(format!("t3-reply-fade-{}", item.id).into()),
+            Animation::new(FADE_IN).with_easing(ease_out_quint()),
+            |this, delta| this.opacity(delta),
+        );
         v_flex()
             .w_full()
             .min_w_0()
@@ -1502,7 +1806,10 @@ impl ThreadView {
         };
         let at = group
             .last()
-            .and_then(|item| item.str_field("completedAt").or_else(|| item.str_field("startedAt")))
+            .and_then(|item| {
+                item.str_field("completedAt")
+                    .or_else(|| item.str_field("startedAt"))
+            })
             .map(str::to_string);
         let only_thought = matches!(group.as_slice(), [only] if only.kind == "reasoning");
         let header = self
@@ -1550,7 +1857,12 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn render_step(&mut self, item: &TurnItem, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_step(
+        &mut self,
+        item: &TurnItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let root = self.worktree_root();
         let step = describe(item, &root);
         let colors = cx.theme().colors().clone();
@@ -1570,10 +1882,14 @@ impl ThreadView {
         }
         let full = self.full_items.get(&revision_key(item)).unwrap_or(item);
         let stats = (item.kind == "file_change")
-            .then(|| match (full.i64_field("additions"), full.i64_field("deletions")) {
-                (Some(additions), Some(deletions)) => Some((additions as usize, deletions as usize)),
-                _ => FileDiff::of(full).map(|diff| (diff.additions, diff.deletions)),
-            })
+            .then(
+                || match (full.i64_field("additions"), full.i64_field("deletions")) {
+                    (Some(additions), Some(deletions)) => {
+                        Some((additions as usize, deletions as usize))
+                    }
+                    _ => FileDiff::of(full).map(|diff| (diff.additions, diff.deletions)),
+                },
+            )
             .flatten();
         let open_path = match item.kind.as_str() {
             "file_change" => item.str_field("fileName").map(str::to_string),
@@ -1614,7 +1930,11 @@ impl ThreadView {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_color(if failed { danger } else { colors.text.opacity(0.85) })
+                        .text_color(if failed {
+                            danger
+                        } else {
+                            colors.text.opacity(0.85)
+                        })
                         .child(step.detail.clone()),
                 )
             })
@@ -1627,10 +1947,18 @@ impl ThreadView {
                         .font(code_font(cx))
                         .text_size(px(11.))
                         .when(additions > 0, |this| {
-                            this.child(div().text_color(status.created).child(format!("+{additions}")))
+                            this.child(
+                                div()
+                                    .text_color(status.created)
+                                    .child(format!("+{additions}")),
+                            )
                         })
                         .when(deletions > 0, |this| {
-                            this.child(div().text_color(status.deleted).child(format!("−{deletions}")))
+                            this.child(
+                                div()
+                                    .text_color(status.deleted)
+                                    .child(format!("−{deletions}")),
+                            )
                         }),
                 )
             })
@@ -1654,10 +1982,12 @@ impl ThreadView {
                     .size(px(20.))
                     .visible_on_hover(hover_group.clone())
                     .tooltip(Tooltip::text(t!("Open file")))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        cx.stop_propagation();
-                        this.open_file(&path, window, cx)
-                    })),
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_file(&path, window, cx)
+                        },
+                    )),
                 )
             })
             .child(
@@ -1671,9 +2001,9 @@ impl ThreadView {
                 )
                 .text_color(text_faint(cx)),
             )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.toggle_step_item(&toggled, cx)
-            }));
+            .on_click(
+                cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_step_item(&toggled, cx)),
+            );
         v_flex()
             .w_full()
             .child(row)
@@ -1686,7 +2016,13 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn render_show_full(&self, id: String, label: SharedString, item_id: &str, cx: &Context<Self>) -> AnyElement {
+    fn render_show_full(
+        &self,
+        id: String,
+        label: SharedString,
+        item_id: &str,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let item_id = item_id.to_string();
         let muted = cx.theme().colors().text_muted;
         div()
@@ -1756,14 +2092,20 @@ impl ThreadView {
                         .text_color(text_faint(cx))
                         .child(t!("… {count} more lines", count = hidden)),
                 )
-                .children(show_full.map(|(id, label, item_id)| {
-                    self.render_show_full(id, label, item_id, cx)
-                }))
+                .children(
+                    show_full
+                        .map(|(id, label, item_id)| self.render_show_full(id, label, item_id, cx)),
+                )
             })
             .into_any_element()
     }
 
-    fn render_step_detail(&mut self, item: &TurnItem, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_step_detail(
+        &mut self,
+        item: &TurnItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let item = self.full_item(item, cx).clone();
         let colors = cx.theme().colors();
         let faint = text_faint(cx);
@@ -1831,7 +2173,11 @@ impl ThreadView {
                 self.code_box(sections, cx)
             }
             "file_change" => match FileDiff::of(&item).filter(|diff| !diff.is_empty()) {
-                Some(diff) => div().w_full().mb(px(6.)).child(diff.render(cx)).into_any_element(),
+                Some(diff) => div()
+                    .w_full()
+                    .mb(px(6.))
+                    .child(diff.render(cx))
+                    .into_any_element(),
                 None if loading => div()
                     .pb(px(6.))
                     .text_size(px(TOOL_TEXT_SIZE))
@@ -1861,7 +2207,11 @@ impl ThreadView {
                         .child(t!("No matches"))
                         .into_any_element();
                 }
-                let shown = if full { results.len() } else { OUTPUT_MAX_LINES };
+                let shown = if full {
+                    results.len()
+                } else {
+                    OUTPUT_MAX_LINES
+                };
                 let hidden = results.len().saturating_sub(shown);
                 let rows = results
                     .iter()
@@ -1937,36 +2287,49 @@ impl ThreadView {
                     .pb(px(6.))
                     .gap(px(4.))
                     .text_size(px(TOOL_TEXT_SIZE))
-                    .children(results.into_iter().enumerate().filter_map(|(position, result)| {
-                        let url = result.get("url")?.as_str()?.to_string();
-                        let title = result
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                            .unwrap_or_else(|| url.clone());
-                        Some(
-                            v_flex()
-                                .id(SharedString::from(format!("{}-web-{position}", item.id)))
-                                .min_w_0()
-                                .cursor_pointer()
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_color(colors.text)
-                                        .hover(|style| style.underline())
-                                        .child(title),
+                    .children(
+                        results
+                            .into_iter()
+                            .enumerate()
+                            .filter_map(|(position, result)| {
+                                let url = result.get("url")?.as_str()?.to_string();
+                                let title = result
+                                    .get("title")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| url.clone());
+                                Some(
+                                    v_flex()
+                                        .id(SharedString::from(format!(
+                                            "{}-web-{position}",
+                                            item.id
+                                        )))
+                                        .min_w_0()
+                                        .cursor_pointer()
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_color(colors.text)
+                                                .hover(|style| style.underline())
+                                                .child(title),
+                                        )
+                                        .child(
+                                            div().truncate().text_color(faint).child(url.clone()),
+                                        )
+                                        .on_click(move |_, _, cx| cx.open_url(&url)),
                                 )
-                                .child(div().truncate().text_color(faint).child(url.clone()))
-                                .on_click(move |_, _, cx| cx.open_url(&url)),
-                        )
-                    }))
+                            }),
+                    )
                     .into_any_element()
             }
             "reasoning" => div()
                 .pb(px(6.))
                 .children(self.markdown_element(&item.id, Self::thought_style(window, cx), cx))
                 .into_any_element(),
-            "todo_list" => div().pb(px(6.)).child(self.render_todo_steps(&item, cx)).into_any_element(),
+            "todo_list" => div()
+                .pb(px(6.))
+                .child(self.render_todo_steps(&item, cx))
+                .into_any_element(),
             "subagent" => {
                 let mut sections = vec![self.code_lines(
                     item.str_field("prompt").unwrap_or(""),
@@ -1992,11 +2355,7 @@ impl ThreadView {
                 self.code_box(sections, cx)
             }
             _ => {
-                let input = item
-                    .fields
-                    .get("input")
-                    .map(value_text)
-                    .unwrap_or_default();
+                let input = item.fields.get("input").map(value_text).unwrap_or_default();
                 let output = item
                     .fields
                     .get("output")
@@ -2068,7 +2427,9 @@ impl ThreadView {
                     .to_string();
                 let (marker, color) = match status {
                     "completed" => (
-                        icon(IconName::AgentCheck, 13.).text_color(success).into_any_element(),
+                        icon(IconName::AgentCheck, 13.)
+                            .text_color(success)
+                            .into_any_element(),
                         text_faint(cx),
                     ),
                     "running" => (
@@ -2150,7 +2511,12 @@ impl ThreadView {
             )
     }
 
-    fn render_card_row(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_card_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(item) = self.items.get(index).cloned() else {
             return div().into_any_element();
         };
@@ -2186,7 +2552,9 @@ impl ThreadView {
                     None,
                     cx,
                 )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_step(&key, cx))),
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_step(&key, cx)),
+                ),
             )
             .when(open, |this| {
                 this.child(
@@ -2211,7 +2579,13 @@ impl ThreadView {
             .gap(px(8.))
             .text_size(ui(12.))
             .text_color(color)
-            .child(div().h(px(1.)).w(px(16.)).flex_none().bg(hairline(0.12, cx)))
+            .child(
+                div()
+                    .h(px(1.))
+                    .w(px(16.))
+                    .flex_none()
+                    .bg(hairline(0.12, cx)),
+            )
             .child(div().min_w_0().child(notice_text(item)))
             .child(div().h(px(1.)).flex_1().bg(hairline(0.12, cx)))
             .into_any_element()
@@ -2257,7 +2631,9 @@ impl ThreadView {
                             .justify_center()
                             .rounded(px(6.))
                             .bg(danger.opacity(0.12))
-                            .child(icon(IconName::AgentDangerTriangle, 12.).text_color(danger_muted)),
+                            .child(
+                                icon(IconName::AgentDangerTriangle, 12.).text_color(danger_muted),
+                            ),
                     )
                     .child(
                         div()
@@ -2355,15 +2731,11 @@ impl ThreadView {
                     .cursor_pointer()
                     .hover(|style| style.bg(ink(0.03, cx)))
                     .child(icon(IconName::AgentDocument, 14.).text_color(colors.text_muted))
-                    .child(
-                        div()
-                            .text_color(colors.text)
-                            .child(if files.len() == 1 {
-                                t!("1 file changed")
-                            } else {
-                                t!("{count} files changed", count = files.len())
-                            }),
-                    )
+                    .child(div().text_color(colors.text).child(if files.len() == 1 {
+                        t!("1 file changed")
+                    } else {
+                        t!("{count} files changed", count = files.len())
+                    }))
                     .child(stats(additions, deletions))
                     .child(div().flex_1())
                     .child(
@@ -2377,9 +2749,9 @@ impl ThreadView {
                         )
                         .text_color(text_faint(cx)),
                     )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.toggle_step(&key, cx)
-                    })),
+                    .on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_step(&key, cx)),
+                    ),
             )
             .when(expanded, |this| {
                 this.child(
@@ -2528,7 +2900,12 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn answer_editor(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) -> Entity<Editor> {
+    fn answer_editor(
+        &mut self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Editor> {
         if let Some(editor) = self.answer_editors.get(key) {
             return editor.clone();
         }
@@ -2543,7 +2920,12 @@ impl ThreadView {
         editor
     }
 
-    fn collect_answers(&self, request_id: &str, questions: &[Value], cx: &App) -> Option<Map<String, Value>> {
+    fn collect_answers(
+        &self,
+        request_id: &str,
+        questions: &[Value],
+        cx: &App,
+    ) -> Option<Map<String, Value>> {
         let chosen = self.answers.get(request_id);
         let mut answers = Map::new();
         for question in questions {
@@ -2585,7 +2967,12 @@ impl ThreadView {
         Some(answers)
     }
 
-    fn render_questions(&mut self, item: &TurnItem, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_questions(
+        &mut self,
+        item: &TurnItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(request_id) = item.str_field("requestId").map(str::to_string) else {
             return div().into_any_element();
         };
@@ -2623,12 +3010,18 @@ impl ThreadView {
         }
         let mut blocks = Vec::new();
         for question in &questions {
-            let Some(question_id) = question.get("id").and_then(Value::as_str).map(str::to_string)
+            let Some(question_id) = question
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
             else {
                 continue;
             };
             let header = question.get("header").and_then(Value::as_str).unwrap_or("");
-            let text = question.get("question").and_then(Value::as_str).unwrap_or("");
+            let text = question
+                .get("question")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let multi = question.get("multiSelect").and_then(Value::as_bool) == Some(true);
             let options = question
                 .get("options")
@@ -2666,11 +3059,14 @@ impl ThreadView {
                     .when(multi, |this| this.rounded(px(3.)))
                     .when(!multi, |this| this.rounded_full())
                     .when(selected, |this| {
-                        this.bg(accent).child(icon(IconName::Check, 10.).text_color(page(cx)))
+                        this.bg(accent)
+                            .child(icon(IconName::Check, 10.).text_color(page(cx)))
                     });
                 Some(
                     h_flex()
-                        .id(SharedString::from(format!("{request_id}-{question_id}-{position}")))
+                        .id(SharedString::from(format!(
+                            "{request_id}-{question_id}-{position}"
+                        )))
                         .items_start()
                         .gap(px(10.))
                         .px(px(10.))
@@ -2707,7 +3103,9 @@ impl ThreadView {
                                 .entry(question_id.clone())
                                 .or_default();
                             if multi {
-                                if let Some(position) = picked.iter().position(|chosen| *chosen == label) {
+                                if let Some(position) =
+                                    picked.iter().position(|chosen| *chosen == label)
+                                {
                                     picked.remove(position);
                                 } else {
                                     picked.push(label.clone());
@@ -2749,9 +3147,7 @@ impl ThreadView {
                     .into_any_element(),
             );
         }
-        let ready = self
-            .collect_answers(&request_id, &questions, cx)
-            .is_some();
+        let ready = self.collect_answers(&request_id, &questions, cx).is_some();
         let submit_request = request_id.clone();
         let dismiss_request = request_id.clone();
         self.card(cx)
@@ -2768,26 +3164,36 @@ impl ThreadView {
                 h_flex()
                     .gap(px(6.))
                     .child(
-                        Button::new(SharedString::from(format!("{request_id}-submit")), t!("Submit"))
-                            .style(ButtonStyle::Filled)
-                            .size(ButtonSize::Medium)
-                            .disabled(!ready)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        Button::new(
+                            SharedString::from(format!("{request_id}-submit")),
+                            t!("Submit"),
+                        )
+                        .style(ButtonStyle::Filled)
+                        .size(ButtonSize::Medium)
+                        .disabled(!ready)
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
                                 this.submit_answers(&submit_request, &questions, cx)
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("{request_id}-dismiss")), t!("Skip"))
-                            .style(ButtonStyle::Subtle)
-                            .size(ButtonSize::Medium)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        Button::new(
+                            SharedString::from(format!("{request_id}-dismiss")),
+                            t!("Skip"),
+                        )
+                        .style(ButtonStyle::Subtle)
+                        .size(ButtonSize::Medium)
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
                                 if let Some(thread_id) = this.thread_id.clone() {
                                     this.run_command(
                                         commands::dismiss_questions(&thread_id, &dismiss_request),
                                         cx,
                                     );
                                 }
-                            })),
+                            },
+                        )),
                     ),
             )
             .into_any_element()
@@ -2815,10 +3221,12 @@ impl ThreadView {
             .map(|started| (chrono::Utc::now() - started).num_seconds().max(0) as u64)
             .unwrap_or(0);
         let seed = flavour_seed(self.thread_id.as_deref().unwrap_or(""));
-        let waiting = self
-            .state
-            .as_ref()
-            .is_some_and(|state| state.runtime_requests.iter().any(|request| request.is_pending()));
+        let waiting = self.state.as_ref().is_some_and(|state| {
+            state
+                .runtime_requests
+                .iter()
+                .any(|request| request.is_pending())
+        });
         let label = if waiting {
             t!("Waiting for you…").to_string()
         } else {
@@ -2827,7 +3235,11 @@ impl ThreadView {
         h_flex()
             .gap(px(SPACE_SM))
             .child(gradient_spinner(
-                format!("t3-working-{}", self.thread_id.as_deref().unwrap_or("draft")).into(),
+                format!(
+                    "t3-working-{}",
+                    self.thread_id.as_deref().unwrap_or("draft")
+                )
+                .into(),
                 14.,
             ))
             .child(
@@ -2845,7 +3257,12 @@ impl ThreadView {
             .into_any_element()
     }
 
-    fn render_turn_actions(&self, turn: &Turn, group: SharedString, cx: &mut Context<Self>) -> AnyElement {
+    fn render_turn_actions(
+        &self,
+        turn: &Turn,
+        group: SharedString,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let text = self
             .items
             .get(turn.items.clone())
@@ -2858,13 +3275,20 @@ impl ThreadView {
         let at = turn
             .last_reply
             .and_then(|reply| self.items.get(reply))
-            .and_then(|item| item.str_field("completedAt").or_else(|| item.str_field("updatedAt")));
+            .and_then(|item| {
+                item.str_field("completedAt")
+                    .or_else(|| item.str_field("updatedAt"))
+            });
         let key: SharedString = format!("copy-turn-{}", self.turn_key(turn)).into();
         self.hover_strip(h_flex().visible_on_hover(group), at, Some((key, text)), cx)
             .into_any_element()
     }
 
-    fn render_transcript(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_transcript(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut rendered = Vec::new();
         let turns = self.turns.clone();
         let last_index = self.items.len().saturating_sub(1);
@@ -2913,7 +3337,11 @@ impl ThreadView {
                 v_flex()
                     .group(group)
                     .w_full()
-                    .pt(px(if turn_index == 0 { SPACE_LG } else { SPACE_LG + 4. }))
+                    .pt(px(if turn_index == 0 {
+                        SPACE_LG
+                    } else {
+                        SPACE_LG + 4.
+                    }))
                     .children(children)
                     .into_any_element(),
             );
@@ -2937,6 +3365,7 @@ impl ThreadView {
         if queue.is_empty() {
             return None;
         }
+        let editing_run = self.queued_edit.as_ref().map(|edit| edit.run_id.clone());
         let colors = cx.theme().colors();
         Some(
             v_flex()
@@ -2960,9 +3389,68 @@ impl ThreadView {
                         .text_color(text_faint(cx))
                         .child(t!("Queued")),
                 )
-                .children(queue.into_iter().map(|(run, text)| {
-                    let run_id = run.id.clone();
+                .children(queue.into_iter().map(|queued| {
+                    let run_id = queued.run.id.clone();
                     let thread_id = thread_id.clone();
+                    let is_editing = editing_run.as_deref() == Some(run_id.as_str());
+                    let row = h_flex()
+                        .h(px(28.))
+                        .px(px(8.))
+                        .gap(px(8.))
+                        .rounded(px(7.))
+                        .when(is_editing, |row| row.bg(ink(0.06, cx)))
+                        .when(!is_editing, |row| {
+                            row.hover(|style| style.bg(ink(0.04, cx)))
+                        })
+                        .child(
+                            icon(
+                                if is_editing {
+                                    IconName::Pencil
+                                } else {
+                                    IconName::AgentArrowRight
+                                },
+                                12.,
+                            )
+                            .text_color(text_faint(cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(ui(13.))
+                                .text_color(colors.text_muted)
+                                .child(single_line(queued.text)),
+                        );
+                    if is_editing {
+                        return row
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(ui(11.))
+                                    .text_color(colors.text)
+                                    .child(t!("Editing in the composer")),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("cancel-edit-{run_id}")))
+                                    .flex_none()
+                                    .h(px(20.))
+                                    .px(px(6.))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(5.))
+                                    .text_size(ui(11.))
+                                    .text_color(colors.text_muted)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(ink(0.08, cx)).text_color(colors.text))
+                                    .tooltip(Tooltip::text(t!("Cancel editing queued message")))
+                                    .child(t!("Cancel"))
+                                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        this.end_queued_edit(window, cx)
+                                    })),
+                            );
+                    }
                     let steer = active_run.clone().map(|target| {
                         let thread_id = thread_id.clone();
                         let run_id = run_id.clone();
@@ -2987,39 +3475,48 @@ impl ThreadView {
                                 )
                             }))
                     });
-                    h_flex()
-                        .h(px(28.))
-                        .px(px(8.))
-                        .gap(px(8.))
-                        .rounded(px(7.))
-                        .hover(|style| style.bg(ink(0.04, cx)))
-                        .child(icon(IconName::AgentArrowRight, 12.).text_color(text_faint(cx)))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(ui(13.))
-                                .text_color(colors.text_muted)
-                                .child(single_line(text)),
+                    let edit = {
+                        let run_id = run_id.clone();
+                        let text = queued.text.to_string();
+                        let attachments = queued.attachments;
+                        icon_button(
+                            SharedString::from(format!("edit-{run_id}")),
+                            IconName::Pencil,
+                            colors.text_muted,
+                            cx,
                         )
-                        .children(steer)
-                        .child(
-                            icon_button(
-                                SharedString::from(format!("cancel-{run_id}")),
-                                IconName::AgentClose,
-                                colors.text_muted,
-                                cx,
-                            )
-                            .size(px(20.))
-                            .tooltip(Tooltip::text(t!("Remove from queue")))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        .size(px(20.))
+                        .tooltip(Tooltip::text(t!("Edit in the composer")))
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, window, cx| {
+                                this.begin_queued_edit(
+                                    run_id.clone(),
+                                    text.clone(),
+                                    attachments.clone(),
+                                    window,
+                                    cx,
+                                )
+                            },
+                        ))
+                    };
+                    row.children(steer).child(edit).child(
+                        icon_button(
+                            SharedString::from(format!("cancel-{run_id}")),
+                            IconName::AgentClose,
+                            colors.text_muted,
+                            cx,
+                        )
+                        .size(px(20.))
+                        .tooltip(Tooltip::text(t!("Remove from queue")))
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
                                 this.run_command(
                                     commands::cancel_queued_run(&thread_id, &run_id),
                                     cx,
                                 )
-                            })),
-                        )
+                            },
+                        )),
+                    )
                 }))
                 .into_any_element(),
         )
@@ -3034,7 +3531,9 @@ impl ThreadView {
             .items
             .iter()
             .rev()
-            .find(|item| item.kind == "todo_list" && item.run_id.as_deref() == Some(active.as_str()))?
+            .find(|item| {
+                item.kind == "todo_list" && item.run_id.as_deref() == Some(active.as_str())
+            })?
             .clone();
         let (done, total) = todo_progress(&todo);
         if total == 0 {
@@ -3081,7 +3580,11 @@ impl ThreadView {
                                 .text_color(colors.text)
                                 .child(t!("Todo")),
                         )
-                        .child(div().text_color(text_faint(cx)).child(format!("{done}/{total}")))
+                        .child(
+                            div()
+                                .text_color(text_faint(cx))
+                                .child(format!("{done}/{total}")),
+                        )
                         .when(!expanded, |this| {
                             this.child(
                                 div()
@@ -3110,7 +3613,12 @@ impl ThreadView {
                         })),
                 )
                 .when(expanded, |this| {
-                    this.child(div().px(px(10.)).pb(px(4.)).child(self.render_todo_steps(&todo, cx)))
+                    this.child(
+                        div()
+                            .px(px(10.))
+                            .pb(px(4.))
+                            .child(self.render_todo_steps(&todo, cx)),
+                    )
                 })
                 .into_any_element(),
         )
@@ -3223,14 +3731,11 @@ impl ThreadView {
                     colors.text_muted
                 };
                 line = line.child(
-                    h_flex()
-                        .gap(px(4.))
-                        .child(window.label.clone())
-                        .child(
-                            div()
-                                .text_color(color)
-                                .child(format!("{}%", (fraction * 100.0).round() as u32)),
-                        ),
+                    h_flex().gap(px(4.)).child(window.label.clone()).child(
+                        div()
+                            .text_color(color)
+                            .child(format!("{}%", (fraction * 100.0).round() as u32)),
+                    ),
                 );
             }
         } else if let Some(error) = &state.error {
@@ -3315,15 +3820,18 @@ impl ThreadView {
             .as_ref()
             .zip(provider.as_ref())
             .and_then(|(selection, provider)| provider.model(&selection.model).cloned());
-        let brand = provider
-            .as_ref()
-            .map_or(IconName::AgentBot, |provider| provider_icon(&provider.driver));
+        let brand = provider.as_ref().map_or(IconName::AgentBot, |provider| {
+            provider_icon(&provider.driver)
+        });
         let brand_color = provider
             .as_ref()
             .and_then(|provider| provider_color(&provider.driver))
             .unwrap_or(colors.text);
         let name = match (&model, &selection) {
-            (Some(model), _) => model.short_name.clone().unwrap_or_else(|| model.name.clone()),
+            (Some(model), _) => model
+                .short_name
+                .clone()
+                .unwrap_or_else(|| model.name.clone()),
             (None, Some(selection)) => selection.model.clone(),
             (None, None) => t!("Choose a model").to_string(),
         };
@@ -3345,9 +3853,20 @@ impl ThreadView {
             .cursor_pointer()
             .hover(|style| style.bg(ink(0.06, cx)))
             .child(icon(brand, 14.).text_color(brand_color))
-            .child(div().min_w_0().truncate().text_color(colors.text).child(name))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(colors.text)
+                    .child(name),
+            )
             .when_some(reasoning, |this, reasoning| {
-                this.child(div().flex_none().text_color(colors.text_muted).child(reasoning))
+                this.child(
+                    div()
+                        .flex_none()
+                        .text_color(colors.text_muted)
+                        .child(reasoning),
+                )
             })
             .when(fast, |this| {
                 this.child(icon(IconName::AgentFastFilled, 12.).text_color(accent(cx)))
@@ -3402,7 +3921,11 @@ impl ThreadView {
                 .rounded(px(6.))
                 .text_size(ui(12.))
                 .cursor_pointer()
-                .text_color(if active { accent(cx) } else { colors.text_muted })
+                .text_color(if active {
+                    accent(cx)
+                } else {
+                    colors.text_muted
+                })
                 .hover(|style| style.bg(ink(0.06, cx)).text_color(colors.text))
                 .child(icon(chip_icon, 12.).text_color(if active {
                     accent(cx)
@@ -3454,6 +3977,7 @@ impl ThreadView {
                 )
             })
             .child(div().flex_1())
+            .children(self.render_background_indicator(cx))
             .children(
                 self.render_plan_usage(cx)
                     .map(|usage| div().min_w_0().overflow_hidden().child(usage)),
@@ -3481,12 +4005,13 @@ impl ThreadView {
                 .items_center()
                 .justify_center()
         };
-        if working && !has_text {
+        let editing = self.queued_edit.is_some();
+        if working && !has_text && !editing {
             return circle("t3-stop")
                 .cursor_pointer()
                 .hover(|style| style.opacity(0.85))
                 .tooltip(move |_, cx| Tooltip::for_action_in(t!("Stop"), &Stop, &focus_handle, cx))
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.stop(&Stop, window, cx)))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.interrupt(cx)))
                 .child(div().size(px(10.)).rounded(px(2.)).bg(plate))
                 .into_any_element();
         }
@@ -3500,11 +4025,25 @@ impl ThreadView {
                     }))
             })
             .tooltip(move |_, cx| {
-                if working {
+                if editing {
+                    Tooltip::with_meta_in(
+                        t!("Update queued message"),
+                        Some(&Send),
+                        t!(
+                            "{modifier}-click to also steer the current turn with it",
+                            modifier = SECONDARY_MODIFIER
+                        ),
+                        &focus_handle,
+                        cx,
+                    )
+                } else if working {
                     Tooltip::with_meta_in(
                         t!("Queue message"),
                         Some(&Send),
-                        t!("{modifier}-click to steer the current turn instead", modifier = SECONDARY_MODIFIER),
+                        t!(
+                            "{modifier}-click to steer the current turn instead",
+                            modifier = SECONDARY_MODIFIER
+                        ),
                         &focus_handle,
                         cx,
                     )
@@ -3528,16 +4067,20 @@ impl ThreadView {
             .on_action(cx.listener(Self::send))
             .on_action(cx.listener(Self::steer))
             .on_action(cx.listener(Self::stop))
-            .on_action(cx.listener(|this, _: &SelectNextCompletion, _, cx| {
-                this.select_next_completion(cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &SelectNextCompletion, _, cx| {
+                    this.select_next_completion(cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectPreviousCompletion, _, cx| {
                 this.select_previous_completion(cx)
             }))
             .on_action(cx.listener(|this, _: &AcceptCompletion, window, cx| {
                 this.accept_completion(None, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &DismissCompletion, _, cx| this.dismiss_completion(cx)))
+            .on_action(
+                cx.listener(|this, _: &DismissCompletion, _, cx| this.dismiss_completion(cx)),
+            )
             .capture_action(cx.listener(|this, _: &editor::actions::Paste, _, cx| {
                 if this.paste_attachments(cx) {
                     cx.stop_propagation();
@@ -3705,6 +4248,7 @@ fn distance_from_bottom(scroll: &ScrollHandle) -> f32 {
 impl Render for ThreadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_tick(cx);
+        self.reconcile_queued_edit(window, cx);
         if is_at_bottom(&self.scroll) {
             self.following = true;
         }
@@ -3739,15 +4283,19 @@ impl Render for ThreadView {
                         .size_full()
                         .overflow_y_scroll()
                         .track_scroll(&self.scroll)
-                        .on_scroll_wheel(cx.listener(|this, event: &gpui::ScrollWheelEvent, _, _| {
-                            if event.delta.pixel_delta(px(16.)).y > px(0.) {
-                                this.following = false;
-                            }
-                        }))
+                        .on_scroll_wheel(cx.listener(
+                            |this, event: &gpui::ScrollWheelEvent, _, _| {
+                                if event.delta.pixel_delta(px(16.)).y > px(0.) {
+                                    this.following = false;
+                                }
+                            },
+                        ))
                         .child(
                             v_flex()
                                 .w_full()
-                                .when(!self.docked, |this| this.max_w(px(TAB_CONTENT_WIDTH)).mx_auto())
+                                .when(!self.docked, |this| {
+                                    this.max_w(px(TAB_CONTENT_WIDTH)).mx_auto()
+                                })
                                 .px(px(GUTTER))
                                 .pb(px(SPACE_LG * 2.))
                                 .when(loading, |this| {
@@ -3779,12 +4327,16 @@ impl Render for ThreadView {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.attach_paths(paths.paths().to_vec(), cx)
             }))
-            .when(!self.docked, |this| this.bg(cx.theme().colors().editor_background))
+            .when(!self.docked, |this| {
+                this.bg(cx.theme().colors().editor_background)
+            })
             .child(div().flex_1().min_h_0().child(body))
             .child(
                 v_flex()
                     .w_full()
-                    .when(!self.docked, |this| this.max_w(px(TAB_CONTENT_WIDTH + 20.)).mx_auto())
+                    .when(!self.docked, |this| {
+                        this.max_w(px(TAB_CONTENT_WIDTH + 20.)).mx_auto()
+                    })
                     .px(px(10.))
                     .pb(px(10.))
                     .pt(px(4.))
@@ -3809,16 +4361,21 @@ impl Render for ThreadView {
                                         cx,
                                     )
                                     .size(px(18.))
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        this.error = None;
-                                        cx.notify();
-                                    })),
+                                    .on_click(cx.listener(
+                                        |this, _: &ClickEvent, _, cx| {
+                                            this.error = None;
+                                            cx.notify();
+                                        },
+                                    )),
                                 ),
                         )
                     })
                     .children(todos)
                     .children(queue)
-                    .children(self.render_completion(cx).map(|menu| div().pb(px(6.)).child(menu)))
+                    .children(
+                        self.render_completion(cx)
+                            .map(|menu| div().pb(px(6.)).child(menu)),
+                    )
                     .child(self.render_composer(cx))
                     .child(div().pt(px(4.)).child(self.render_composer_footer(cx))),
             )
@@ -3830,14 +4387,18 @@ fn resets_in(resets_at: chrono::DateTime<chrono::Utc>) -> Option<String> {
     if minutes <= 0 {
         return None;
     }
-    Some(match (minutes / (60 * 24), minutes / 60 % 24, minutes % 60) {
-        (0, 0, minutes) => t!("Resets in {minutes}m", minutes = minutes).to_string(),
-        (0, hours, minutes) => t!(
-            "Resets in {hours}h {minutes}m",
-            hours = hours,
-            minutes = minutes
-        )
-        .to_string(),
-        (days, hours, _) => t!("Resets in {days}d {hours}h", days = days, hours = hours).to_string(),
-    })
+    Some(
+        match (minutes / (60 * 24), minutes / 60 % 24, minutes % 60) {
+            (0, 0, minutes) => t!("Resets in {minutes}m", minutes = minutes).to_string(),
+            (0, hours, minutes) => t!(
+                "Resets in {hours}h {minutes}m",
+                hours = hours,
+                minutes = minutes
+            )
+            .to_string(),
+            (days, hours, _) => {
+                t!("Resets in {days}d {hours}h", days = days, hours = hours).to_string()
+            }
+        },
+    )
 }

@@ -148,7 +148,9 @@ impl ThreadView {
             return;
         }
         let selected = match &self.completion {
-            Some(completion) if completion.kind == kind && completion.token.query == token.query => {
+            Some(completion)
+                if completion.kind == kind && completion.token.query == token.query =>
+            {
                 completion.selected
             }
             _ => 0,
@@ -193,10 +195,9 @@ impl ThreadView {
             return Vec::new();
         };
         let root = self.worktree_root().to_string_lossy().into_owned();
-        let snapshots = provider
-            .workspace_snapshots
-            .iter()
-            .filter(|snapshot| snapshot.cwd == root || snapshot.cwd == self.project_root.to_string_lossy());
+        let snapshots = provider.workspace_snapshots.iter().filter(|snapshot| {
+            snapshot.cwd == root || snapshot.cwd == self.project_root.to_string_lossy()
+        });
         let mut items: Vec<Item> = Vec::new();
         let mut push = |name: &str, detail: Option<&str>, icon: ItemIcon| {
             if name.is_empty() || items.iter().any(|item| item.label == format!("/{name}")) {
@@ -214,7 +215,11 @@ impl ThreadView {
             .flat_map(|snapshot| snapshot.slash_commands.iter())
             .chain(provider.slash_commands.iter())
         {
-            push(&command.name, command.description.as_deref(), ItemIcon::Command);
+            push(
+                &command.name,
+                command.description.as_deref(),
+                ItemIcon::Command,
+            );
         }
         if matches!(provider.driver.as_str(), "claudeAgent" | "claude") {
             for skill in snapshots
@@ -309,7 +314,9 @@ impl ThreadView {
                     && completion.token.query == query
                 {
                     completion.items = items;
-                    completion.selected = completion.selected.min(completion.items.len().saturating_sub(1));
+                    completion.selected = completion
+                        .selected
+                        .min(completion.items.len().saturating_sub(1));
                     cx.notify();
                 }
             })
@@ -351,7 +358,12 @@ impl ThreadView {
         }
     }
 
-    pub(super) fn accept_completion(&mut self, index: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn accept_completion(
+        &mut self,
+        index: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(completion) = self.completion.take() else {
             return;
         };
@@ -392,7 +404,10 @@ impl ThreadView {
     }
 
     pub(super) fn render_completion(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let completion = self.completion.as_ref().filter(|completion| !completion.items.is_empty())?;
+        let completion = self
+            .completion
+            .as_ref()
+            .filter(|completion| !completion.items.is_empty())?;
         let colors = cx.theme().colors();
         let first = completion
             .selected
@@ -509,7 +524,13 @@ mod tests {
     #[test]
     fn mentions_are_relative_and_quoted_when_needed() {
         let root = Path::new("/work");
-        assert_eq!(mention_text(Path::new("/work/src/a.rs"), root, false), "@src/a.rs");
-        assert_eq!(mention_text(Path::new("/work/my dir"), root, true), "@\"my dir\"/");
+        assert_eq!(
+            mention_text(Path::new("/work/src/a.rs"), root, false),
+            "@src/a.rs"
+        );
+        assert_eq!(
+            mention_text(Path::new("/work/my dir"), root, true),
+            "@\"my dir\"/"
+        );
     }
 }

@@ -32,7 +32,11 @@ pub fn classify(item: &TurnItem) -> Class {
                 .get("files")
                 .and_then(Value::as_array)
                 .is_some_and(|files| !files.is_empty());
-            if has_files { Class::Card } else { Class::Hidden }
+            if has_files {
+                Class::Card
+            } else {
+                Class::Hidden
+            }
         }
         "approval_request" | "user_input_request" | "error" | "proposed_plan" => Class::Card,
         "system_notice" | "run_interrupt_request" | "run_interrupt_result" => {
@@ -43,7 +47,13 @@ pub fn classify(item: &TurnItem) -> Class {
             }
         }
         "compaction" => Class::Card,
-        _ if item.title.as_deref().is_some_and(|title| !title.trim().is_empty()) => Class::Card,
+        _ if item
+            .title
+            .as_deref()
+            .is_some_and(|title| !title.trim().is_empty()) =>
+        {
+            Class::Card
+        }
         _ => Class::Hidden,
     }
 }
@@ -231,10 +241,16 @@ pub fn unwrap_shell(command: &str) -> String {
         if !matches!(program, "bash" | "zsh" | "sh") {
             continue;
         }
-        if let Some(inner) = rest.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')) {
+        if let Some(inner) = rest
+            .strip_prefix('\'')
+            .and_then(|rest| rest.strip_suffix('\''))
+        {
             return inner.replace(r"'\''", "'");
         }
-        if let Some(inner) = rest.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')) {
+        if let Some(inner) = rest
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+        {
             return inner.replace(r#"\""#, "\"");
         }
     }
@@ -638,7 +654,12 @@ mod tests {
             item("u1", "r1", "user_message", json!({ "text": "hi" })),
             item("t1", "r1", "reasoning", json!({ "text": "hmm" })),
             item("c1", "r1", "command_execution", json!({ "input": "ls" })),
-            item("a1", "r1", "assistant_message", json!({ "text": "looking" })),
+            item(
+                "a1",
+                "r1",
+                "assistant_message",
+                json!({ "text": "looking" }),
+            ),
             item("c2", "r1", "command_execution", json!({ "input": "cat x" })),
             item("a2", "r1", "assistant_message", json!({ "text": "done" })),
             item(

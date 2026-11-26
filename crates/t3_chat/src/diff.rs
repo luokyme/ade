@@ -2,7 +2,9 @@
 //! or from the replaced and replacing text when that is all it has.
 
 use crate::style::{code_font, text_faint};
-use gpui::{AnyElement, App, Hsla, IntoElement, ParentElement, SharedString, Styled, div, hsla, px};
+use gpui::{
+    AnyElement, App, Hsla, IntoElement, ParentElement, SharedString, Styled, div, hsla, px,
+};
 use i18n::t;
 use t3_client::protocol::TurnItem;
 use theme::ActiveTheme as _;
@@ -40,7 +42,10 @@ pub struct FileDiff {
 
 impl FileDiff {
     pub fn of(item: &TurnItem) -> Option<Self> {
-        if let Some(diff) = item.str_field("diffStr").filter(|diff| !diff.trim().is_empty()) {
+        if let Some(diff) = item
+            .str_field("diffStr")
+            .filter(|diff| !diff.trim().is_empty())
+        {
             return Some(Self::parse_unified(diff));
         }
         let new = item.str_field("newStr")?;
@@ -198,9 +203,7 @@ impl FileDiff {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lines
-            .iter()
-            .all(|line| line.kind == LineKind::Hunk)
+        self.lines.iter().all(|line| line.kind == LineKind::Hunk)
     }
 
     pub fn render(&self, cx: &App) -> AnyElement {
@@ -266,7 +269,11 @@ impl FileDiff {
                         .text_size(px(11.))
                         .line_height(px(LINE_HEIGHT))
                         .text_color(tint.map_or(faint.opacity(0.8), |tint| tint.opacity(0.9)))
-                        .child(line.number.map(|number| number.to_string()).unwrap_or_default()),
+                        .child(
+                            line.number
+                                .map(|number| number.to_string())
+                                .unwrap_or_default(),
+                        ),
                 )
                 .child(
                     div()

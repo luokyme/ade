@@ -6,7 +6,7 @@
 
 - 已开发、本机安装，并在隔离实例里截图实测：`crates/t3_client` 实现 Effect RPC 客户端、本机 server 发现与 token、shell 和对话状态合并；`crates/t3_chat` 提供右侧停靠的 T3 Code 面板，对话也能作为编辑区标签页打开（`tab.rs`，标签页按工作区存在 kv `t3_chat_tabs_<workspace id>`，重启后恢复）。面板入口没有放进标题栏左侧分段按钮（受 TITLEBAR-009 约束），通过 `t3_chat::ToggleFocus` 和面板按钮打开。
 - 用户要求对话窗口“使劲优化”，并要求参考 T3 自己的界面、补齐思考等级和 fast 等模型选项。当前做法：整体沿用 Ade “对话”（`agent_chat`）的配色和 Markdown 样式（辅助函数复制在 `t3_chat/src/style.rs`，不依赖 `agent_chat`，它将来可能移除）；工作记录、输入框、模型选择器、权限选择按 T3 网页端的布局做：“工作了 Xs”分隔行、紧凑的单行步骤、“任务 x/y”行、三栏模型选择器（提供方、可搜索模型列表、按模型 `optionDescriptors` 生成的选项）、标准/快速切换、输入框下方的计划模式和四档权限。英文文案尽量与 `agent_chat` 或 T3 相同，以复用已有中文翻译。
-- 已覆盖：连接与自动重连、必要时启动 `t3 serve`、匹配或添加项目、对话列表、重启后恢复上次打开的对话（kv `t3_chat_open_thread_<workspace id>`）、时间线各类条目、按需拉取命令输出和文件 diff、运行中命令的实时输出、发送、排队、引导（Ctrl/Cmd+Enter 或 Ctrl 点击发送，排队消息可“引导”）、停止、审批、回答提问、模型及其选项、权限、计划模式、附件和图片（选择、拖放、粘贴）、`@` 文件和 `/` 命令补全、“从这里重新编辑”回退检查点。附件上传、实时输出、回退、回答提问、模型和模式设置都已对真实 server 验证。
+- 已覆盖：连接与自动重连、必要时启动 `t3 serve`、匹配或添加项目、对话列表、重启后恢复上次打开的对话（kv `t3_chat_open_thread_<workspace id>`）、时间线各类条目、按需拉取命令输出和文件 diff、运行中命令的实时输出、发送、排队、引导（Ctrl/Cmd+Enter 或 Ctrl 点击发送，排队消息可“引导”，也可点铅笔载入输入框重新编辑）、停止、审批、回答提问、模型及其选项、权限、计划模式、附件和图片（选择、拖放、粘贴）、`@` 文件和 `/` 命令补全、“从这里重新编辑”回退检查点、对话置顶与取消置顶（列表行悬停按钮）、后台任务（输入框下方的标记和任务卡片，列表行显示“后台运行中”）。附件上传、实时输出、回退、回答提问、模型和模式设置都已对真实 server 验证。
 - 标题栏项目小圆点：`workspace::register_agent_activity_source` 支持多个来源，取最紧急的一个；T3 来源在 `t3_chat/src/store.rs`，按项目根目录匹配 T3 项目，运行中为“工作中”，待回应的提问或审批为“需要你”。面板创建时就连接 server，所以面板关着也有圆点。未做“完成/失败”提示（T3 没有已读状态，需要在 Ade 侧记录）。
 - 未做（尚未与用户确认优先级）：整轮 diff 查看（`getTurnDiff`）、`$` 技能引用（T3 用 skill 上下文记录，不是纯文本）、发出消息里附件图片的缩略图（需 `assets.createUrl`）、远程 `wss://` 与配对、设置项、旧对话迁移、移除 `agent_chat`。`@` 文件目前以 `@相对路径` 纯文本发送，T3 原生是带 mention 上下文记录的标记。
 
@@ -17,7 +17,10 @@
 - 回答提问：`runtime-request.respond` 带 `answers`，按问题 id 填选项 label 或自由文本，多选填数组；T3 会把回答作为一条用户消息交给智能体。
 - 附件：先 `attachments.createUploadUrl` 拿到附件 id 和签名地址，再把原始字节 `POST` 到 server 源地址加该相对地址（`Content-Length` 必须等于声明大小，成功返回 204），最后在 `message.dispatch` 的 `attachments` 里按 id 引用。图片只接受 png/jpeg/gif/webp，单张 10 MB；其他文件 50 MB。
 - 回退：每个 checkpoint scope 先有序号 0 的基线，之后每轮一个；回退到第 N 轮之前就是 `checkpoint.rollback` 到序号 N−1，`restoreFiles` 决定是否还原文件。server 是异步执行，稍后才把该轮标成 `rolled_back`。
+- 置顶：`thread.pin` 的 `orderKey` 由客户端算（Ade 移植了 server 的 `pinOrderKeyBetween`，排在全部已置顶对话最前，不限项目）；不带 key 的置顶会排在有 key 的后面。已对隔离 server 实测。拖动排序（`thread.pin.reorder`）未做。
+- 后台任务（如 Claude 后台编译）：shell 线程的 `pendingBackgroundTasks` 已由 server 汇总好，直接用；T3 0.1.12 不能单独结束某一个，网页端的 Stop 发不带 runId 的 `thread.stop`，一次结束整个对话的后台工作，回合运行中时禁用。Ade 照此实现，未对真实后台任务实测。
 - 引导：新消息用 `message.dispatch` 的 `steer_active`；已排队的消息用 `queued-message.promote-to-steer`。
+- 编辑排队消息：`queued-run.edit` 带 `runId`、`text`；省略 `attachments` 表示保留原有文件，传了就整体替换。消息记录不带文件，原文件要从隐藏的 `user_message` 条目（按 `messageId` 匹配）读取，回传时要保留 `source` 等未知字段。run 一旦开始，server 会拒绝编辑（“Run … is not queued.”）。2026-11-26 只对隔离 server 验证了命令格式，完整流程未对真实排队实测。
 - 模型选项全部来自 server 配置里每个模型的 `capabilities.optionDescriptors`，选择以 `[{id, value}]` 放进 `modelSelection.options`。快速模式各家不同：Claude 是布尔 `fastMode`，Codex 是 `serviceTier` 的 `priority` 选项。已有对话用 `thread.model-selection.set`、`thread.runtime-mode.set`、`thread.interaction-mode.set` 修改；provider 的 `supportedRuntimeModes` 为空表示四档权限都支持。
 
 ## 开发与验证环境

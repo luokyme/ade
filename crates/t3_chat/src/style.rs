@@ -7,10 +7,10 @@ use gpui::{
     hsla, point, px, rems, rgb, size, svg,
 };
 use i18n::{n, t};
+use settings::Settings as _;
 use std::time::Duration;
 use theme::ActiveTheme as _;
 use theme_settings::ThemeSettings;
-use settings::Settings as _;
 use ui::{IconName, prelude::*};
 use util::ResultExt as _;
 
@@ -150,7 +150,11 @@ fn gspin_opacity(phase: f32, dim: f32) -> f32 {
 fn logo_band_tint(band: usize) -> Hsla {
     let depth = band as f32 / (LOGO_BANDS - 1) as f32;
     if depth < 0.5 {
-        mix(rgb(GSPIN_TOP_TINT).into(), rgb(GSPIN_MIDDLE_TINT).into(), depth * 2.)
+        mix(
+            rgb(GSPIN_TOP_TINT).into(),
+            rgb(GSPIN_MIDDLE_TINT).into(),
+            depth * 2.,
+        )
     } else {
         mix(
             rgb(GSPIN_MIDDLE_TINT).into(),
@@ -197,7 +201,12 @@ pub fn gradient_spinner(id: SharedString, height: f32) -> impl IntoElement {
         }))
 }
 
-pub fn spinning_icon(id: impl Into<ElementId>, name: IconName, size: f32, color: Hsla) -> AnyElement {
+pub fn spinning_icon(
+    id: impl Into<ElementId>,
+    name: IconName,
+    size: f32,
+    color: Hsla,
+) -> AnyElement {
     icon(name, size)
         .text_color(color)
         .with_animation(
@@ -297,8 +306,7 @@ fn shimmer_overlay(text: SharedString, phase: f32, base: Hsla, peak: Hsla) -> im
                 strikethrough: None,
             };
             let text_system = window.text_system();
-            let probe =
-                text_system.shape_line(text.clone(), font_size, &[run(peak)], None);
+            let probe = text_system.shape_line(text.clone(), font_size, &[run(peak)], None);
             let text_width = f32::from(probe.width()).min(f32::from(bounds.size.width));
             let strip_count = (text_width / SHIMMER_STRIP_WIDTH).ceil() as usize;
             let base_line = text_system.shape_line(text.clone(), font_size, &[run(base)], None);
@@ -323,7 +331,14 @@ fn shimmer_overlay(text: SharedString, phase: f32, base: Hsla, peak: Hsla) -> im
         },
         move |bounds, (base_line, strips, line_height), window, cx| {
             base_line
-                .paint(bounds.origin, line_height, TextAlign::Left, None, window, cx)
+                .paint(
+                    bounds.origin,
+                    line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                )
                 .log_err();
             for (left, right, line) in strips {
                 let mask = ContentMask {
@@ -358,10 +373,16 @@ pub fn shimmer_title(text: SharedString, id: ElementId, base: Hsla, peak: Hsla) 
         .min_w_0()
         .flex_1()
         .overflow_hidden()
-        .child(div().text_color(gpui::transparent_black()).child(text.clone()))
-        .with_animation(id, working_animation(SHIMMER_PERIOD), move |title, phase| {
-            title.child(shimmer_overlay(text.clone(), phase, base, peak))
-        })
+        .child(
+            div()
+                .text_color(gpui::transparent_black())
+                .child(text.clone()),
+        )
+        .with_animation(
+            id,
+            working_animation(SHIMMER_PERIOD),
+            move |title, phase| title.child(shimmer_overlay(text.clone(), phase, base, peak)),
+        )
         .into_any_element()
 }
 

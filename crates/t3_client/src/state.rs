@@ -3,8 +3,8 @@
 //! the record with the same id.
 
 use crate::protocol::{
-    Checkpoint, Message, ProjectShell, Run, RunAttempt, RuntimeRequest, ShellStreamItem, ThreadEvent,
-    ThreadRecord, ThreadShell, ThreadStreamItem, TurnItem,
+    ChatAttachment, Checkpoint, Message, ProjectShell, Run, RunAttempt, RuntimeRequest,
+    ShellStreamItem, ThreadEvent, ThreadRecord, ThreadShell, ThreadStreamItem, TurnItem,
 };
 use std::collections::HashMap;
 
@@ -126,9 +126,9 @@ impl ShellState {
             .find(|project| std::path::Path::new(&project.workspace_root) == root)
     }
 
-    /// The project's top-level threads: pinned first, then running ones, then the rest. Within
-    /// each group the thread the user wrote to most recently comes first. Sorting by `updated_at`
-    /// would reshuffle running threads on every agent event.
+    /// The project's top-level threads: pinned first, in T3 Code's pin order, then running ones,
+    /// then the rest. Outside the pinned group the thread the user wrote to most recently comes
+    /// first. Sorting by `updated_at` would reshuffle running threads on every agent event.
     pub fn project_threads(&self, project_id: &str) -> Vec<&ThreadShell> {
         let mut threads = self
             .threads
@@ -143,12 +143,116 @@ impl ShellState {
             b.pinned_at
                 .is_some()
                 .cmp(&a.pinned_at.is_some())
+                .then_with(|| {
+                    if a.pinned_at.is_none() || b.pinned_at.is_none() {
+                        return std::cmp::Ordering::Equal;
+                    }
+                    // Matches the T3 Code sidebar: keyed pins in key order, then pins without a
+                    // key (made by older servers) newest first.
+                    match (&a.pin_order_key, &b.pin_order_key) {
+                        (Some(a_key), Some(b_key)) => a_key.cmp(b_key),
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => b.created_at.cmp(&a.created_at),
+                    }
+                })
                 .then_with(|| b.is_working().cmp(&a.is_working()))
                 .then_with(|| b.last_activity_key().cmp(a.last_activity_key()))
                 .then_with(|| a.id.cmp(&b.id))
         });
         threads
     }
+
+    /// An order key that puts a newly pinned thread above every pinned thread, like T3 Code's
+    /// sidebar does. `None` when the existing keys are malformed; pin without a key then.
+    pub fn top_pin_order_key(&self) -> Option<String> {
+        let first = self
+            .threads
+            .values()
+            .filter(|thread| thread.pinned_at.is_some())
+            .filter_map(|thread| thread.pin_order_key.as_deref())
+            .min();
+        pin_order_key_between(None, first)
+    }
+}
+
+// Pin order keys are base-26 fractions written with `a`–`z`, optionally behind a `0` tier marker.
+// This mirrors `pinOrderKeyBetween` in the T3 Code server so keys stay compatible.
+const PIN_ORDER_TIER: u8 = b'0';
+const PIN_ORDER_FIRST_DIGIT: u8 = b'a';
+const PIN_ORDER_BASE: u8 = 26;
+
+fn is_valid_pin_order_key(key: &[u8]) -> bool {
+    let digits = key.strip_prefix(&[PIN_ORDER_TIER]).unwrap_or(key);
+    digits
+        .last()
+        .is_some_and(|last| *last != PIN_ORDER_FIRST_DIGIT)
+        && digits.iter().all(u8::is_ascii_lowercase)
+}
+
+/// A digit string strictly between `low` and `high`, read as fractions in (0, 1). An empty
+/// bound is open on that side.
+fn pin_order_midpoint(low: &[u8], high: &[u8]) -> Option<Vec<u8>> {
+    if !high.is_empty() && low >= high {
+        return None;
+    }
+    if !high.is_empty() {
+        let mut common = 0;
+        while Some(low.get(common).copied().unwrap_or(PIN_ORDER_FIRST_DIGIT))
+            == high.get(common).copied()
+        {
+            common += 1;
+        }
+        if common > 0 {
+            let mut key = high[..common].to_vec();
+            key.extend(pin_order_midpoint(
+                low.get(common..).unwrap_or_default(),
+                &high[common..],
+            )?);
+            return Some(key);
+        }
+    }
+    let low_digit = low.first().map_or(0, |digit| digit - PIN_ORDER_FIRST_DIGIT);
+    let high_digit = high
+        .first()
+        .map_or(PIN_ORDER_BASE, |digit| digit - PIN_ORDER_FIRST_DIGIT);
+    if high_digit > low_digit + 1 {
+        return Some(vec![
+            PIN_ORDER_FIRST_DIGIT + (low_digit + high_digit).div_ceil(2),
+        ]);
+    }
+    if high.len() > 1 {
+        return Some(vec![high[0]]);
+    }
+    let mut key = vec![PIN_ORDER_FIRST_DIGIT + low_digit];
+    key.extend(pin_order_midpoint(low.get(1..).unwrap_or_default(), &[])?);
+    Some(key)
+}
+
+fn pin_order_key_between(before: Option<&str>, after: Option<&str>) -> Option<String> {
+    let low = before.unwrap_or_default().as_bytes();
+    let high = after.unwrap_or_default().as_bytes();
+    if (!low.is_empty() && !is_valid_pin_order_key(low))
+        || (!high.is_empty() && !is_valid_pin_order_key(high))
+        || (!high.is_empty() && low >= high)
+    {
+        return None;
+    }
+    let key = if let Some(high_digits) = high.strip_prefix(&[PIN_ORDER_TIER]) {
+        let mut key = vec![PIN_ORDER_TIER];
+        key.extend(pin_order_midpoint(
+            low.get(1..).unwrap_or_default(),
+            high_digits,
+        )?);
+        key
+    } else if let Some(low_digits) = low.strip_prefix(&[PIN_ORDER_TIER]) {
+        let mut key = vec![PIN_ORDER_TIER];
+        key.extend(pin_order_midpoint(low_digits, &[])?);
+        key
+    } else {
+        pin_order_midpoint(low, high)?
+    };
+    String::from_utf8(key).ok()
 }
 
 /// A row of history that came from another thread, such as the parent of a fork.
@@ -156,6 +260,13 @@ impl ShellState {
 pub struct InheritedItem {
     pub source_thread_id: String,
     pub item: TurnItem,
+}
+
+/// A message waiting in the thread's queue for its run to start.
+pub struct QueuedMessage<'a> {
+    pub run: &'a Run,
+    pub text: &'a str,
+    pub attachments: Vec<ChatAttachment>,
 }
 
 #[derive(Clone, Debug)]
@@ -281,7 +392,9 @@ impl ThreadState {
                 }
             }
             ThreadEvent::CheckpointUpdated(checkpoint) => {
-                upsert(&mut self.checkpoints, checkpoint, |checkpoint| &checkpoint.id)
+                upsert(&mut self.checkpoints, checkpoint, |checkpoint| {
+                    &checkpoint.id
+                })
             }
             ThreadEvent::Other(_) => return Applied::Unchanged,
         }
@@ -352,8 +465,8 @@ impl ThreadState {
         self.runs.iter().rev().find(|run| run.is_active())
     }
 
-    /// Queued runs in the order they will start, with the text each one will send.
-    pub fn queue(&self) -> Vec<(&Run, &str)> {
+    /// Queued runs in the order they will start, with the message each one will send.
+    pub fn queue(&self) -> Vec<QueuedMessage<'_>> {
         let mut queued = self
             .runs
             .iter()
@@ -363,9 +476,8 @@ impl ThreadState {
         queued
             .into_iter()
             .map(|run| {
-                let text = run
-                    .user_message_id
-                    .as_deref()
+                let message_id = run.user_message_id.as_deref();
+                let text = message_id
                     .and_then(|message_id| {
                         self.messages
                             .iter()
@@ -374,7 +486,28 @@ impl ThreadState {
                     })
                     .map(|message| message.text.as_str())
                     .unwrap_or("");
-                (run, text)
+                // Messages carry no files; the queued user message item does.
+                let attachments = message_id
+                    .and_then(|message_id| {
+                        self.items.iter().rev().find(|item| {
+                            item.kind == "user_message"
+                                && item.str_field("messageId") == Some(message_id)
+                        })
+                    })
+                    .and_then(|item| item.fields.get("attachments"))
+                    .and_then(|attachments| {
+                        serde_json::from_value::<Vec<ChatAttachment>>(attachments.clone())
+                            .map_err(|error| {
+                                log::warn!("unreadable queued message attachments: {error}")
+                            })
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                QueuedMessage {
+                    run,
+                    text,
+                    attachments,
+                }
             })
             .collect()
     }
@@ -559,6 +692,9 @@ mod tests {
         let queued_message = json!({
             "id": "q", "threadId": "t1", "runId": "r2", "ordinal": 5, "status": "completed",
             "type": "user_message", "inputIntent": "queued_turn", "text": "later",
+            "messageId": "m2",
+            "attachments": [{ "type": "file", "id": "f1", "name": "notes.txt",
+                              "mimeType": "text/plain", "sizeBytes": 4 }],
         });
         state.apply(snapshot(
             vec![item("a", 1, "user_message", json!({})), queued_message],
@@ -576,7 +712,9 @@ mod tests {
         assert_eq!(timeline_ids(&state), ["a"]);
         let queue = state.queue();
         assert_eq!(queue.len(), 1);
-        assert_eq!(queue[0].1, "later");
+        assert_eq!(queue[0].text, "later");
+        assert_eq!(queue[0].attachments.len(), 1);
+        assert_eq!(queue[0].attachments[0].id, "f1");
         assert_eq!(state.active_run().map(|run| run.id.as_str()), Some("r1"));
 
         state.apply(event(
@@ -609,7 +747,11 @@ mod tests {
         ] {
             state.apply(event(sequence, "checkpoint.captured", payload));
         }
-        let id = |run| state.checkpoint_before_run(run).map(|checkpoint| checkpoint.id.as_str());
+        let id = |run| {
+            state
+                .checkpoint_before_run(run)
+                .map(|checkpoint| checkpoint.id.as_str())
+        };
         assert_eq!(id("r1"), Some("c0"));
         assert_eq!(id("r2"), Some("c1"));
         assert_eq!(id("missing"), None);
@@ -698,5 +840,102 @@ mod tests {
         );
         assert_eq!(shell.project_threads("p").len(), 4);
         assert_eq!(shell.projects[0].title, "P renamed");
+    }
+
+    #[test]
+    fn pinned_threads_follow_their_order_keys() {
+        let mut shell = ShellState::default();
+        shell.apply(
+            ShellStreamItem::parse(&json!({
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshotSequence": 1,
+                    "threads": [
+                        { "id": "plain", "projectId": "p", "title": "Plain", "updatedAt": "2026-05-01",
+                          "activeRunId": "r" },
+                        { "id": "old-unkeyed", "projectId": "p", "title": "A", "createdAt": "2026-01-01",
+                          "pinnedAt": "2026-04-01" },
+                        { "id": "new-unkeyed", "projectId": "p", "title": "B", "createdAt": "2026-02-01",
+                          "pinnedAt": "2026-04-01" },
+                        { "id": "second", "projectId": "p", "title": "C", "createdAt": "2026-01-01",
+                          "pinnedAt": "2026-03-01", "pinOrderKey": "n" },
+                        { "id": "first", "projectId": "q", "title": "D", "createdAt": "2026-01-01",
+                          "pinnedAt": "2026-03-02", "pinOrderKey": "h" },
+                        { "id": "top", "projectId": "p", "title": "E", "createdAt": "2026-01-01",
+                          "pinnedAt": "2026-03-03", "pinOrderKey": "d" },
+                    ],
+                    "projects": [],
+                },
+            }))
+            .expect("parses"),
+        );
+        let ids = shell
+            .project_threads("p")
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            ["top", "second", "new-unkeyed", "old-unkeyed", "plain"]
+        );
+        // Like T3 Code, a new pin goes above the pins of every project.
+        assert_eq!(shell.top_pin_order_key().as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn shell_threads_carry_their_background_tasks() {
+        let mut shell = ShellState::default();
+        shell.apply(
+            ShellStreamItem::parse(&json!({
+                "kind": "snapshot",
+                "snapshot": {
+                    "snapshotSequence": 1,
+                    "threads": [
+                        { "id": "t", "projectId": "p", "title": "T", "pendingBackgroundTasks": [
+                            { "kind": "command", "taskId": "b1", "description": "Build release",
+                              "command": "cargo build --release", "itemId": "item-1", "awaited": true },
+                            { "kind": "subagent", "taskId": "s1", "childThreadId": "child" },
+                            { "kind": "something-newer", "taskId": "x1" },
+                        ] },
+                        { "id": "idle", "projectId": "p", "title": "Idle" },
+                    ],
+                    "projects": [],
+                },
+            }))
+            .expect("parses"),
+        );
+        let tasks = &shell.threads["t"].pending_background_tasks;
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].kind, "command");
+        assert_eq!(tasks[0].command.as_deref(), Some("cargo build --release"));
+        assert_eq!(tasks[0].item_id.as_deref(), Some("item-1"));
+        assert_eq!(tasks[1].child_thread_id.as_deref(), Some("child"));
+        assert!(shell.threads["idle"].pending_background_tasks.is_empty());
+    }
+
+    #[test]
+    fn pin_order_keys_match_t3_code() {
+        let top = |first: Option<&str>| pin_order_key_between(None, first);
+        assert_eq!(top(None).as_deref(), Some("n"));
+        assert_eq!(top(Some("n")).as_deref(), Some("h"));
+        assert_eq!(top(Some("b")).as_deref(), Some("an"));
+        assert_eq!(top(Some("an")).as_deref(), Some("ah"));
+        assert_eq!(top(Some("ab")).as_deref(), Some("aan"));
+        assert_eq!(top(Some("0b")).as_deref(), Some("0an"));
+        assert_eq!(top(Some("A")), None);
+        assert_eq!(top(Some("na")), None);
+        assert_eq!(
+            pin_order_key_between(Some("h"), Some("n")).as_deref(),
+            Some("k")
+        );
+        assert_eq!(pin_order_key_between(Some("n"), None).as_deref(), Some("u"));
+        assert_eq!(pin_order_key_between(Some("n"), Some("h")), None);
+
+        let mut key = top(None);
+        for _ in 0..200 {
+            let next = top(key.as_deref()).expect("a key above any valid key");
+            assert!(next < key.expect("valid key"));
+            key = Some(next);
+        }
     }
 }
