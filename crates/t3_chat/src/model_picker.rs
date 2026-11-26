@@ -233,11 +233,13 @@ impl ModelPicker {
                     .hover(|style| style.bg(ink(0.06, cx)))
                     .tooltip(ui::Tooltip::text(provider.display_name.clone()))
                     .child(
-                        icon(provider_icon(&provider.driver), 16.).text_color(if selected {
-                            colors.text
-                        } else {
-                            colors.text_muted
-                        }),
+                        icon(provider_icon(&provider.driver), 16.).text_color(
+                            provider_color(&provider.driver).unwrap_or(if selected {
+                                colors.text
+                            } else {
+                                colors.text_muted
+                            }),
+                        ),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.provider = instance.clone();
@@ -268,6 +270,7 @@ impl ModelPicker {
         });
         let rows = provider.map(|provider| {
             let brand = provider_icon(&provider.driver);
+            let brand_color = provider_color(&provider.driver).unwrap_or(colors.text);
             models
                 .into_iter()
                 .map(|model| {
@@ -283,7 +286,7 @@ impl ModelPicker {
                         .cursor_pointer()
                         .when(selected, |this| this.bg(ink(0.06, cx)))
                         .hover(|style| style.bg(ink(0.08, cx)))
-                        .child(icon(brand, 14.).text_color(colors.text_muted))
+                        .child(icon(brand, 14.).text_color(brand_color))
                         .child(
                             div()
                                 .flex_1()

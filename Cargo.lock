@@ -12088,6 +12088,7 @@ dependencies = [
 name = "t3_chat"
 version = "0.1.0"
 dependencies = [
+ "agent_harness",
  "anyhow",
  "chrono",
  "db",
@@ -12097,6 +12098,7 @@ dependencies = [
  "fuzzy_nucleo",
  "gpui",
  "gpui_tokio",
+ "http_client",
  "i18n",
  "language",
  "log",

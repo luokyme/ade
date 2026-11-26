@@ -1,9 +1,15 @@
+use agent_harness::{
+    HarnessId,
+    usage::{PlanUsage, UsageRequest, status_message},
+};
 use anyhow::{Result, anyhow};
 use db::kvp::KeyValueStore;
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
+use std::time::Instant;
 use i18n::t;
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     hash::{Hash as _, Hasher as _},
     path::PathBuf,
     sync::Arc,
@@ -26,6 +32,60 @@ const RECONNECT_DELAYS: &[Duration] = &[
     Duration::from_secs(10),
     Duration::from_secs(30),
 ];
+
+const USAGE_REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// What the local CLI's own login reports for a subscription, read the way Ade's native chat does.
+#[derive(Default)]
+pub struct PlanUsageState {
+    pub usage: Option<PlanUsage>,
+    pub error: Option<SharedString>,
+    loading: bool,
+    fetched_at: Option<Instant>,
+    task: Option<Task<()>>,
+}
+
+/// Only these providers have a subscription whose usage the CLI login can query.
+pub fn usage_harness(driver: &str) -> Option<HarnessId> {
+    match driver {
+        "claudeAgent" | "claude" => Some(HarnessId::ClaudeCode),
+        "codex" => Some(HarnessId::Codex),
+        _ => None,
+    }
+}
+
+async fn fetch_plan_usage(
+    harness: HarnessId,
+    request: UsageRequest,
+    http: Arc<dyn http_client::HttpClient>,
+) -> Result<PlanUsage, String> {
+    use futures::AsyncReadExt as _;
+    let mut builder = http_client::Request::builder()
+        .method(http_client::Method::GET)
+        .uri(request.url);
+    for (name, value) in &request.headers {
+        builder = builder.header(*name, value);
+    }
+    let unavailable =
+        |error: anyhow::Error| t!("Usage unavailable: {error}", error = error).to_string();
+    let http_request = builder
+        .body(http_client::AsyncBody::empty())
+        .map_err(|error| unavailable(error.into()))?;
+    let mut response = http.send(http_request).await.map_err(unavailable)?;
+    if !response.status().is_success() {
+        return Err(status_message(response.status().as_u16()));
+    }
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .read_to_end(&mut body)
+        .await
+        .map_err(|error| unavailable(error.into()))?;
+    let json: Value = serde_json::from_slice(&body).map_err(|error| unavailable(error.into()))?;
+    request
+        .parse(harness, &json)
+        .ok_or_else(|| t!("Usage unavailable: unexpected response").to_string())
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Status {
@@ -80,6 +140,7 @@ pub struct T3Store {
     connect_task: Option<Task<()>>,
     shell_task: Option<Task<()>>,
     reconnect_task: Option<Task<()>>,
+    plan_usage: HashMap<HarnessId, PlanUsageState>,
 }
 
 impl T3Store {
@@ -140,6 +201,7 @@ impl T3Store {
             connect_task: None,
             shell_task: None,
             reconnect_task: None,
+            plan_usage: HashMap::new(),
         }
     }
 
@@ -157,6 +219,48 @@ impl T3Store {
 
     pub fn shell(&self) -> &ShellState {
         &self.shell
+    }
+
+    pub fn plan_usage(&self, harness: HarnessId) -> Option<&PlanUsageState> {
+        self.plan_usage.get(&harness)
+    }
+
+    /// Cheap to call often: it fetches at most once per refresh interval unless `force` is set.
+    pub fn refresh_plan_usage(&mut self, harness: HarnessId, force: bool, cx: &mut Context<Self>) {
+        let state = self.plan_usage.entry(harness).or_default();
+        let fresh = state
+            .fetched_at
+            .is_some_and(|fetched_at| fetched_at.elapsed() < USAGE_REFRESH_INTERVAL);
+        if state.loading || (fresh && !force) {
+            return;
+        }
+        state.loading = true;
+        let http = cx.http_client();
+        let request = gpui_tokio::Tokio::spawn(cx, async move {
+            agent_harness::usage::usage_request(harness).await
+        });
+        state.task = Some(cx.spawn(async move |this, cx| {
+            let result = match request.await {
+                Ok(Ok(request)) => fetch_plan_usage(harness, request, http).await,
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(error.to_string()),
+            };
+            this.update(cx, |this, cx| {
+                let state = this.plan_usage.entry(harness).or_default();
+                state.loading = false;
+                state.fetched_at = Some(Instant::now());
+                state.task = None;
+                match result {
+                    Ok(usage) => {
+                        state.usage = Some(usage);
+                        state.error = None;
+                    }
+                    Err(error) => state.error = Some(error.into()),
+                }
+                cx.notify();
+            })
+            .log_err();
+        }));
     }
 
     pub fn providers(&self) -> &[ProviderInfo] {

@@ -2,7 +2,7 @@
 
 use crate::{
     MoveToPanel, T3Panel,
-    model_picker::provider_icon,
+    model_picker::{provider_color, provider_icon},
     store::T3Store,
     thread_view::{ThreadView, ThreadViewEvent},
 };
@@ -136,7 +136,11 @@ impl Item for ThreadView {
 
     fn tab_icon(&self, _: &Window, cx: &App) -> Option<Icon> {
         let driver = self.provider_driver(cx).unwrap_or_default();
-        Some(Icon::new(provider_icon(&driver)))
+        let icon = Icon::new(provider_icon(&driver));
+        Some(match provider_color(&driver) {
+            Some(color) => icon.color(Color::Custom(color)),
+            None => icon,
+        })
     }
 
     fn tab_bar_buttons(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {

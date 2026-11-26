@@ -6,10 +6,10 @@ use crate::{
     Steer, Stop,
     diff::FileDiff,
     model_picker::{
-        ModelPicker, OnMode, OnSelection, PermissionPicker, is_fast, provider_icon,
+        ModelPicker, OnMode, OnSelection, PermissionPicker, is_fast, provider_color, provider_icon,
         reasoning_label, runtime_mode_info,
     },
-    store::T3Store,
+    store::{T3Store, usage_harness},
     style::{
         SPACE_LG, SPACE_MD, SPACE_SM, TOOL_LINE_HEIGHT, TOOL_TEXT_SIZE, accent, code_font,
         composer_surface,
@@ -22,6 +22,7 @@ use crate::{
         turn_rows, unwrap_shell, value_text,
     },
 };
+use agent_harness::HarnessId;
 use editor::{Editor, EditorEvent};
 use gpui::ExternalPaths;
 use gpui::{
@@ -253,6 +254,7 @@ impl ThreadView {
                 if store.connection().is_some() && store.generation() != this.generation {
                     this.subscribe(cx);
                 }
+                this.refresh_plan_usage(cx);
                 cx.emit(ThreadViewEvent::Changed);
                 cx.notify();
             }),
@@ -317,6 +319,7 @@ impl ThreadView {
         };
         this.store.update(cx, |store, cx| store.ensure_connected(cx));
         this.subscribe(cx);
+        this.refresh_plan_usage(cx);
         this
     }
 
@@ -1271,21 +1274,76 @@ impl ThreadView {
         cx.notify();
     }
 
-    fn render_reply(&self, index: usize, window: &Window, cx: &Context<Self>) -> AnyElement {
+    /// The reply's thought, when it is the only step before it. Its entry sits beside the reply
+    /// instead of taking a row of its own.
+    fn thought_before_reply(&self, rows: &[Row], position: usize) -> Option<usize> {
+        let (Some(Row::Work(range)), Some(Row::Reply(_))) =
+            (rows.get(position), rows.get(position + 1))
+        else {
+            return None;
+        };
+        let only = self.items.get(range.clone())?;
+        matches!(only, [item] if item.kind == "reasoning").then_some(range.start)
+    }
+
+    fn render_reply(
+        &self,
+        index: usize,
+        thought: Option<usize>,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let Some(item) = self.items.get(index) else {
             return div().into_any_element();
         };
         let body = self
             .markdown_element(&item.id, Self::message_style(window, cx), cx)
             .unwrap_or_else(|| item.text().to_string().into_any_element());
-        div()
-            .w_full()
+        let thought = thought.and_then(|thought| self.items.get(thought));
+        let entry = thought.map(|thought| {
+            let group_key = format!("t3-group-{}", thought.id);
+            let open = self.group_overrides.get(&group_key).copied().unwrap_or(false);
+            let button = icon_button(
+                ElementId::Name(format!("{group_key}-entry").into()),
+                IconName::AgentChatRoundLine,
+                if open { cx.theme().colors().text } else { text_faint(cx) },
+                cx,
+            )
+            .tooltip(Tooltip::text(t!("Thought process")))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.group_overrides.insert(group_key.clone(), !open);
+                cx.notify();
+            }));
+            (button, open, thought.id.clone())
+        });
+        let open_thought = entry.as_ref().and_then(|(_, open, id)| {
+            open.then(|| {
+                self.markdown_element(id, Self::thought_style(window, cx), cx)
+                    .map(|thought| div().pb(px(8.)).child(thought))
+            })
+            .flatten()
+        });
+        let reply = div()
+            .flex_1()
             .min_w_0()
             .child(body)
             .with_animation(
                 ElementId::Name(format!("t3-reply-fade-{}", item.id).into()),
                 Animation::new(FADE_IN).with_easing(ease_out_quint()),
                 |this, delta| this.opacity(delta),
+            );
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .children(open_thought)
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .items_start()
+                    .gap(px(4.))
+                    .child(reply)
+                    .children(entry.map(|(button, _, _)| button)),
             )
             .into_any_element()
     }
@@ -2819,15 +2877,22 @@ impl ThreadView {
             let group: SharedString = format!("t3-turn-{}", self.turn_key(turn)).into();
             let mut children: Vec<AnyElement> = Vec::new();
             let mut previous: Option<&Row> = None;
-            for row in &rows {
+            let mut merged_thought: Option<usize> = None;
+            for (position, row) in rows.iter().enumerate() {
                 let element = match row {
                     Row::User(index) => self.render_user(*index, window, cx),
                     Row::Worked => self.render_worked(turn, cx),
                     Row::Work(range) => {
+                        if let Some(thought) = self.thought_before_reply(&rows, position) {
+                            merged_thought = Some(thought);
+                            continue;
+                        }
                         let is_live = live && range.contains(&last_index);
                         self.render_work_group(range.clone(), is_live, window, cx)
                     }
-                    Row::Reply(index) => self.render_reply(*index, window, cx),
+                    Row::Reply(index) => {
+                        self.render_reply(*index, merged_thought.take(), window, cx)
+                    }
                     Row::Card(index) => self.render_card_row(*index, window, cx),
                     Row::Working => self.render_working(cx),
                     Row::Actions => self.render_turn_actions(turn, group.clone(), cx),
@@ -3105,6 +3170,81 @@ impl ThreadView {
             .cloned()
     }
 
+    fn current_usage_harness(&self, cx: &App) -> Option<HarnessId> {
+        self.current_provider(cx)
+            .and_then(|provider| usage_harness(&provider.driver))
+    }
+
+    fn refresh_plan_usage(&mut self, cx: &mut Context<Self>) {
+        if let Some(harness) = self.current_usage_harness(cx) {
+            self.store
+                .update(cx, |store, cx| store.refresh_plan_usage(harness, false, cx));
+        }
+    }
+
+    fn render_plan_usage(&self, cx: &App) -> Option<AnyElement> {
+        let harness = self.current_usage_harness(cx)?;
+        let state = self.store.read(cx).plan_usage(harness)?;
+        let colors = cx.theme().colors();
+        let status = cx.theme().status();
+        let usage = state.usage.as_ref();
+        if usage.is_none() && state.error.is_none() {
+            return None;
+        }
+        let tooltip = usage
+            .map(|usage| {
+                usage
+                    .windows
+                    .iter()
+                    .map(|window| match window.resets_at.and_then(resets_in) {
+                        Some(resets) => format!("{} · {resets}", window.label),
+                        None => window.label.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        let mut line = h_flex()
+            .id("t3-plan-usage")
+            .px(px(8.))
+            .gap(px(10.))
+            .text_size(ui(11.))
+            .text_color(colors.text_muted);
+        if let Some(usage) = usage {
+            if let Some(plan) = &usage.plan_label {
+                line = line.child(div().text_color(text_faint(cx)).child(plan.clone()));
+            }
+            for window in &usage.windows {
+                let fraction = window.used_fraction.clamp(0.0, 1.0);
+                let color = if fraction >= 0.95 {
+                    status.error
+                } else if fraction >= 0.8 {
+                    status.warning
+                } else {
+                    colors.text_muted
+                };
+                line = line.child(
+                    h_flex()
+                        .gap(px(4.))
+                        .child(window.label.clone())
+                        .child(
+                            div()
+                                .text_color(color)
+                                .child(format!("{}%", (fraction * 100.0).round() as u32)),
+                        ),
+                );
+            }
+        } else if let Some(error) = &state.error {
+            line = line.child(div().text_color(text_faint(cx)).child(error.clone()));
+        }
+        Some(
+            line.when(!tooltip.is_empty(), |this| {
+                this.tooltip(Tooltip::text(tooltip))
+            })
+            .into_any_element(),
+        )
+    }
+
     fn set_selection(&mut self, selection: ModelSelection, cx: &mut Context<Self>) {
         if self.current_selection().is_none_or(|current| {
             current.instance_id != selection.instance_id || current.model != selection.model
@@ -3179,6 +3319,10 @@ impl ThreadView {
         let brand = provider
             .as_ref()
             .map_or(IconName::AgentBot, |provider| provider_icon(&provider.driver));
+        let brand_color = provider
+            .as_ref()
+            .and_then(|provider| provider_color(&provider.driver))
+            .unwrap_or(colors.text);
         let name = match (&model, &selection) {
             (Some(model), _) => model.short_name.clone().unwrap_or_else(|| model.name.clone()),
             (None, Some(selection)) => selection.model.clone(),
@@ -3201,7 +3345,7 @@ impl ThreadView {
             .text_size(ui(12.))
             .cursor_pointer()
             .hover(|style| style.bg(ink(0.06, cx)))
-            .child(icon(brand, 14.).text_color(colors.text_muted))
+            .child(icon(brand, 14.).text_color(brand_color))
             .child(div().min_w_0().truncate().text_color(colors.text).child(name))
             .when_some(reasoning, |this, reasoning| {
                 this.child(div().flex_none().text_color(colors.text_muted).child(reasoning))
@@ -3673,7 +3817,25 @@ impl Render for ThreadView {
                     .children(queue)
                     .children(self.render_completion(cx).map(|menu| div().pb(px(6.)).child(menu)))
                     .child(self.render_composer(cx))
-                    .child(div().pt(px(4.)).child(self.render_composer_footer(cx))),
+                    .child(div().pt(px(4.)).child(self.render_composer_footer(cx)))
+                    .children(self.render_plan_usage(cx).map(|usage| div().pt(px(2.)).child(usage))),
             )
     }
+}
+
+fn resets_in(resets_at: chrono::DateTime<chrono::Utc>) -> Option<String> {
+    let minutes = (resets_at - chrono::Utc::now()).num_minutes();
+    if minutes <= 0 {
+        return None;
+    }
+    Some(match (minutes / (60 * 24), minutes / 60 % 24, minutes % 60) {
+        (0, 0, minutes) => t!("Resets in {minutes}m", minutes = minutes).to_string(),
+        (0, hours, minutes) => t!(
+            "Resets in {hours}h {minutes}m",
+            hours = hours,
+            minutes = minutes
+        )
+        .to_string(),
+        (days, hours, _) => t!("Resets in {days}d {hours}h", days = days, hours = hours).to_string(),
+    })
 }
