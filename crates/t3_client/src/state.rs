@@ -3,8 +3,9 @@
 //! the record with the same id.
 
 use crate::protocol::{
-    ChatAttachment, Checkpoint, Message, ProjectShell, Run, RunAttempt, RuntimeRequest,
-    ShellStreamItem, ThreadEvent, ThreadRecord, ThreadShell, ThreadStreamItem, TurnItem,
+    ChatAttachment, Checkpoint, ContextTokenUsage, Message, ProjectShell, ProviderThread,
+    ProviderTurn, Run, RunAttempt, RuntimeRequest, ShellStreamItem, ThreadEvent, ThreadRecord,
+    ThreadShell, ThreadStreamItem, TurnItem,
 };
 use std::collections::HashMap;
 
@@ -269,6 +270,37 @@ pub struct QueuedMessage<'a> {
     pub attachments: Vec<ChatAttachment>,
 }
 
+/// How full the model's context window is for the thread's current agent session.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContextWindow {
+    pub used_tokens: u64,
+    pub max_tokens: Option<u64>,
+    pub auto_compact_threshold: Option<u64>,
+}
+
+impl ContextWindow {
+    pub fn used_fraction(&self) -> Option<f64> {
+        let max_tokens = self.max_tokens.filter(|max_tokens| *max_tokens > 0)?;
+        Some((self.used_tokens as f64 / max_tokens as f64).min(1.0))
+    }
+
+    fn from_usage(usage: &ContextTokenUsage) -> Self {
+        Self {
+            used_tokens: usage.used_tokens,
+            max_tokens: usage.max_tokens,
+            auto_compact_threshold: usage.auto_compact_threshold,
+        }
+    }
+
+    fn after_compaction(item: &TurnItem, max_tokens: Option<u64>) -> Option<Self> {
+        Some(Self {
+            used_tokens: item.fields.get("afterTokenCount")?.as_u64()?,
+            max_tokens,
+            auto_compact_threshold: None,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ThreadState {
     pub thread_id: String,
@@ -280,6 +312,8 @@ pub struct ThreadState {
     pub messages: Vec<Message>,
     pub runtime_requests: Vec<RuntimeRequest>,
     pub checkpoints: Vec<Checkpoint>,
+    pub provider_threads: Vec<ProviderThread>,
+    pub provider_turns: Vec<ProviderTurn>,
     pub inherited: Vec<InheritedItem>,
     items: Vec<TurnItem>,
 }
@@ -296,6 +330,8 @@ impl ThreadState {
             messages: Vec::new(),
             runtime_requests: Vec::new(),
             checkpoints: Vec::new(),
+            provider_threads: Vec::new(),
+            provider_turns: Vec::new(),
             inherited: Vec::new(),
             items: Vec::new(),
         }
@@ -323,6 +359,8 @@ impl ThreadState {
                 self.messages = projection.messages;
                 self.runtime_requests = projection.runtime_requests;
                 self.checkpoints = projection.checkpoints;
+                self.provider_threads = projection.provider_threads;
+                self.provider_turns = projection.provider_turns;
                 self.inherited = projection
                     .visible_turn_items
                     .into_iter()
@@ -396,6 +434,32 @@ impl ThreadState {
                     &checkpoint.id
                 })
             }
+            ThreadEvent::ProviderThreadUpdated(provider_thread) => {
+                if let Some(thread) = self.thread.as_mut()
+                    && provider_thread.app_thread_id.as_deref() == Some(thread.id.as_str())
+                    && !provider_thread.is_placeholder()
+                {
+                    thread.active_provider_thread_id = Some(provider_thread.id.clone());
+                }
+                upsert(
+                    &mut self.provider_threads,
+                    provider_thread,
+                    |provider_thread| &provider_thread.id,
+                )
+            }
+            ThreadEvent::ProviderTurnUpdated(mut provider_turn) => {
+                // Status updates leave out the usage the turn already reported.
+                if provider_turn.token_usage.is_none() {
+                    provider_turn.token_usage = self
+                        .provider_turns
+                        .iter()
+                        .find(|known| known.id == provider_turn.id)
+                        .and_then(|known| known.token_usage.clone());
+                }
+                upsert(&mut self.provider_turns, provider_turn, |provider_turn| {
+                    &provider_turn.id
+                })
+            }
             ThreadEvent::Other(_) => return Applied::Unchanged,
         }
         Applied::Changed
@@ -450,6 +514,79 @@ impl ThreadState {
             candidate.kind == "run_interrupt_request" && candidate.run_id.as_deref() == Some(run_id)
         });
         superseded && !requested
+    }
+
+    fn active_provider_thread(&self) -> Option<&ProviderThread> {
+        let active_id = self.thread.as_ref()?.active_provider_thread_id.as_deref()?;
+        self.provider_threads
+            .iter()
+            .find(|provider_thread| provider_thread.id == active_id)
+    }
+
+    /// Mirrors T3 Code's composer meter: the newest usage the active session reported, unless a
+    /// compaction finished after it.
+    pub fn context_window(&self) -> Option<ContextWindow> {
+        let active = self.active_provider_thread();
+        let from_other_session = |item: &TurnItem| {
+            active.is_some_and(|active| {
+                item.str_field("providerThreadId")
+                    .is_some_and(|provider_thread_id| provider_thread_id != active.id)
+            })
+        };
+        let latest_usage = self
+            .provider_turns
+            .iter()
+            .filter(|turn| {
+                active.is_none_or(|active| turn.provider_thread_id.as_deref() == Some(&active.id))
+            })
+            .filter_map(|turn| turn.token_usage.as_ref())
+            .fold(
+                None,
+                |newest: Option<&ContextTokenUsage>, usage| match newest {
+                    Some(newest) if usage.updated_at < newest.updated_at => Some(newest),
+                    _ => Some(usage),
+                },
+            );
+        let session_usage = active.and_then(|active| {
+            Some((
+                active.context_usage.as_ref()?,
+                active.updated_at.as_deref()?,
+            ))
+        });
+        let compaction = self
+            .timeline()
+            .filter(|item| item.kind == "compaction" && !from_other_session(item))
+            .collect::<Vec<_>>();
+        let completed_compaction = compaction
+            .iter()
+            .rev()
+            .find(|item| item.status == "completed");
+
+        let reported_at = latest_usage
+            .and_then(|usage| usage.updated_at.as_deref())
+            .or(session_usage.map(|(_, updated_at)| updated_at));
+        if let Some(item) = completed_compaction {
+            let compacted_at = item
+                .str_field("completedAt")
+                .or(item.str_field("updatedAt"))
+                .unwrap_or_default();
+            if reported_at.is_none_or(|reported_at| compacted_at > reported_at) {
+                let max_tokens = latest_usage
+                    .and_then(|usage| usage.max_tokens)
+                    .or(session_usage.and_then(|(usage, _)| usage.max_tokens));
+                return ContextWindow::after_compaction(item, max_tokens);
+            }
+        }
+        if let Some(usage) = latest_usage {
+            return Some(ContextWindow::from_usage(usage));
+        }
+        if let Some((usage, _)) = session_usage {
+            return Some(ContextWindow::from_usage(usage));
+        }
+        compaction
+            .iter()
+            .rev()
+            .find_map(|item| ContextWindow::after_compaction(item, None))
     }
 
     /// This thread's own visible timeline, oldest first. Inherited rows come before it.
@@ -937,5 +1074,72 @@ mod tests {
             assert!(next < key.expect("valid key"));
             key = Some(next);
         }
+    }
+
+    #[test]
+    fn context_window_follows_the_active_session_and_compactions() {
+        let usage = |used: u64, at: &str| json!({ "usedTokens": used, "maxTokens": 200000, "updatedAt": at });
+        let mut state = ThreadState::new("t1");
+        state.apply(parse_thread(json!({
+            "kind": "snapshot",
+            "snapshotSequence": 10,
+            "projection": {
+                "thread": { "id": "t1", "title": "Play", "activeProviderThreadId": "pt1" },
+                "providerThreads": [
+                    { "id": "pt1", "appThreadId": "t1", "status": "idle" },
+                    { "id": "pt0", "appThreadId": "t1", "status": "closed" },
+                ],
+                "providerTurns": [
+                    { "id": "a", "providerThreadId": "pt1",
+                      "tokenUsage": usage(50000, "2026-11-25T12:00:02.000Z") },
+                    { "id": "b", "providerThreadId": "pt1",
+                      "tokenUsage": usage(20000, "2026-11-25T12:00:01.000Z") },
+                    { "id": "c", "providerThreadId": "pt0",
+                      "tokenUsage": usage(190000, "2026-11-25T12:00:09.000Z") },
+                ],
+                "turnItems": [],
+                "visibleTurnItems": [],
+            },
+        })));
+        let window = state.context_window().expect("usage reported");
+        assert_eq!(window.used_tokens, 50000);
+        assert_eq!(window.used_fraction(), Some(0.25));
+
+        // A status-only update keeps the usage the turn already reported.
+        state.apply(event(
+            11,
+            "provider-turn.updated",
+            json!({ "id": "a", "providerThreadId": "pt1", "status": "completed" }),
+        ));
+        assert_eq!(
+            state.context_window().map(|window| window.used_tokens),
+            Some(50000)
+        );
+
+        state.apply(event(
+            12,
+            "turn-item.updated",
+            item(
+                "compact",
+                5,
+                "compaction",
+                json!({
+                    "providerThreadId": "pt1", "afterTokenCount": 8000,
+                    "completedAt": "2026-11-25T12:00:05.000Z",
+                }),
+            ),
+        ));
+        let window = state.context_window().expect("compaction reported");
+        assert_eq!(
+            (window.used_tokens, window.max_tokens),
+            (8000, Some(200000))
+        );
+
+        state.apply(event(
+            13,
+            "provider-thread.updated",
+            json!({ "id": "pt2", "appThreadId": "t1", "status": "active" }),
+        ));
+        assert_eq!(state.context_window(), None);
     }
 }

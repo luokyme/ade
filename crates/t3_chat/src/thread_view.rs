@@ -1,6 +1,9 @@
 mod attachments;
 mod background_tasks;
+mod cards;
 mod completion;
+mod context_window;
+mod events;
 
 use crate::{
     AcceptCompletion, DismissCompletion, SelectNextCompletion, SelectPreviousCompletion, Send,
@@ -18,8 +21,8 @@ use crate::{
     },
     transcript::{
         Class, Row, Tally, Turn, classify, clip_lines, describe, display_path, group_summary,
-        group_turns, is_workspace_setup, notice_text, single_line, strip_ansi, todo_progress,
-        turn_rows, unwrap_shell, value_text,
+        group_turns, is_workspace_setup, notice_text, reply_text, sent_message, single_line,
+        strip_ansi, todo_progress, turn_rows, unwrap_shell, value_text,
     },
 };
 use agent_harness::HarnessId;
@@ -144,6 +147,7 @@ pub struct ThreadView {
     copied_reset: Option<Task<()>>,
     answers: HashMap<String, HashMap<String, Vec<String>>>,
     answer_editors: HashMap<String, Entity<Editor>>,
+    cards: cards::CardInputs,
     todos_expanded: bool,
     background_stop: Option<background_tasks::BackgroundStop>,
     tick: Option<Task<()>>,
@@ -329,6 +333,7 @@ impl ThreadView {
             copied_reset: None,
             answers: HashMap::default(),
             answer_editors: HashMap::default(),
+            cards: cards::CardInputs::default(),
             todos_expanded: false,
             background_stop: None,
             tick: None,
@@ -477,15 +482,12 @@ impl ThreadView {
             .iter()
             .filter_map(|item| {
                 let text = match item.kind.as_str() {
-                    "assistant_message" | "user_message" | "reasoning" => item.text(),
-                    "proposed_plan" => item.str_field("markdown").unwrap_or(""),
+                    "assistant_message" | "user_message" | "reasoning" => item.text().to_string(),
+                    "proposed_plan" => item.str_field("markdown").unwrap_or("").to_string(),
+                    "dynamic_tool" => sent_message(item)?,
                     _ => return None,
                 };
-                Some((
-                    item.id.clone(),
-                    item.kind == "user_message",
-                    text.to_string(),
-                ))
+                Some((item.id.clone(), item.kind == "user_message", text))
             })
             .collect::<Vec<_>>();
         for (id, is_user, text) in sources {
@@ -1598,7 +1600,7 @@ impl ThreadView {
         };
         let body = self
             .markdown_element(&item.id, Self::message_style(window, cx), cx)
-            .unwrap_or_else(|| item.text().to_string().into_any_element());
+            .unwrap_or_else(|| reply_text(item).into_owned().into_any_element());
         let thought = thought.and_then(|thought| self.items.get(thought));
         let entry = thought.map(|thought| {
             let group_key = format!("t3-group-{}", thought.id);
@@ -2523,6 +2525,14 @@ impl ThreadView {
         match item.kind.as_str() {
             "approval_request" => self.render_approval(&item, cx),
             "user_input_request" => self.render_questions(&item, window, cx),
+            "secret_request" => self.render_secret_request(&item, window, cx),
+            "feedback_request" => self.render_feedback_request(&item, cx),
+            "link_request" => self.render_link_request(&item, window, cx),
+            "fork" => self.render_fork(&item, cx),
+            "thread_created" => self.render_thread_created(&item, cx),
+            "handoff" => self.render_handoff(&item, cx),
+            "notification" => self.render_notification(&item, cx),
+            "dynamic_tool" => self.render_html_page(&item, cx),
             "error" => self.render_error(&item, cx),
             "checkpoint" => self.render_checkpoint(&item, cx),
             "todo_list" => self.render_tasks(&item, cx),
@@ -3269,7 +3279,7 @@ impl ThreadView {
             .unwrap_or_default()
             .iter()
             .filter(|item| classify(item) == Class::Reply)
-            .map(|item| item.text())
+            .map(|item| reply_text(item))
             .collect::<Vec<_>>()
             .join("\n\n");
         let at = turn
@@ -3982,6 +3992,7 @@ impl ThreadView {
                 self.render_plan_usage(cx)
                     .map(|usage| div().min_w_0().overflow_hidden().child(usage)),
             )
+            .children(self.render_context_window(cx))
             .child(permission)
             .into_any_element()
     }

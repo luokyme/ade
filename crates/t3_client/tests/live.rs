@@ -183,3 +183,47 @@ async fn downloads_an_uploaded_attachment() {
         .expect("downloading");
     assert_eq!(bytes, png);
 }
+
+#[tokio::test]
+#[ignore]
+async fn card_answers_reach_the_server() {
+    let Some(options) = options() else {
+        eprintln!("T3_LIVE_HOME and T3_LIVE_TOKEN_FILE are not set");
+        return;
+    };
+    let connection = Connection::connect_local(&options).await.expect("connects");
+    let error = connection
+        .answer_secret_request(
+            "missing-thread",
+            "missing-item",
+            &t3_client::protocol::SecretAnswer::Decline,
+        )
+        .await
+        .expect_err("there is no such card");
+    let t3_client::rpc::RpcError::Failure { error, .. } = error else {
+        panic!("expected a typed failure, got {error}");
+    };
+    assert_eq!(error["_tag"], "SecretRequestError", "{error}");
+
+    let error = connection
+        .answer_feedback_request("missing-thread", "missing-item", false, false)
+        .await
+        .expect_err("there is no such card");
+    let t3_client::rpc::RpcError::Failure { error, .. } = error else {
+        panic!("expected a typed failure, got {error}");
+    };
+    assert_eq!(error["_tag"], "AgentFeedbackRequestError", "{error}");
+
+    let error = connection
+        .answer_link_request(
+            "missing-thread",
+            "missing-item",
+            &t3_client::protocol::LinkAnswer::Decline,
+        )
+        .await
+        .expect_err("there is no such card");
+    let t3_client::rpc::RpcError::Failure { error, .. } = error else {
+        panic!("expected a typed failure, got {error}");
+    };
+    assert_eq!(error["_tag"], "PeerLinkRequestError", "{error}");
+}

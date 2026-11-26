@@ -249,7 +249,7 @@ impl T3Panel {
         self.open_view(project_id, root, None, selection, true, window, cx);
     }
 
-    fn open_thread(
+    pub(crate) fn open_thread(
         &mut self,
         thread_id: String,
         in_editor: bool,
@@ -672,6 +672,8 @@ impl T3Panel {
             (t!("Needs your input"), accent)
         } else if thread.is_working() {
             (t!("Working"), colors.text_muted)
+        } else if thread.is_waiting_on_background() {
+            (t!("Waiting on background work"), colors.text_muted)
         } else if in_background {
             (t!("Running in background"), colors.text_muted)
         } else if failed {

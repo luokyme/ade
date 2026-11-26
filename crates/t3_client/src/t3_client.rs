@@ -255,6 +255,55 @@ impl Connection {
         }
     }
 
+    /// Answers a `secret_request` card in a thread. The agent learns the outcome from the thread.
+    pub async fn answer_secret_request(
+        &self,
+        thread_id: &str,
+        turn_item_id: &str,
+        answer: &protocol::SecretAnswer,
+    ) -> Result<(), RpcError> {
+        self.rpc
+            .request(
+                methods::SECRETS_ANSWER_REQUEST,
+                answer.request(thread_id, turn_item_id),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Sends or declines a report an agent drafted for the T3 team.
+    pub async fn answer_feedback_request(
+        &self,
+        thread_id: &str,
+        turn_item_id: &str,
+        send: bool,
+        include_conversation: bool,
+    ) -> Result<(), RpcError> {
+        self.rpc
+            .request(
+                methods::AGENT_FEEDBACK_ANSWER_REQUEST,
+                protocol::feedback_answer(thread_id, turn_item_id, send, include_conversation),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Answers a card asking to link another T3 Code environment.
+    pub async fn answer_link_request(
+        &self,
+        thread_id: &str,
+        turn_item_id: &str,
+        answer: &protocol::LinkAnswer,
+    ) -> Result<(), RpcError> {
+        self.rpc
+            .request(
+                methods::PEER_LINKS_ANSWER_REQUEST,
+                answer.request(thread_id, turn_item_id),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Adds a folder as a project and returns the project's id.
     pub async fn create_project(
         &self,

@@ -21,6 +21,9 @@ pub mod methods {
     pub const ATTACHMENTS_CREATE_UPLOAD_URL: &str = "attachments.createUploadUrl";
     pub const ASSETS_CREATE_URL: &str = "assets.createUrl";
     pub const PROJECTS_MUTATE: &str = "projects.mutate";
+    pub const SECRETS_ANSWER_REQUEST: &str = "secrets.answerRequest";
+    pub const AGENT_FEEDBACK_ANSWER_REQUEST: &str = "agentFeedback.answerRequest";
+    pub const PEER_LINKS_ANSWER_REQUEST: &str = "peerLinks.answerRequest";
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -347,6 +350,18 @@ pub struct BackgroundTask {
     pub item_id: Option<String>,
     #[serde(default)]
     pub child_thread_id: Option<String>,
+    /// Set by the agent's `t3_background_wait`: it resumes when this work ends.
+    #[serde(default)]
+    pub awaited: bool,
+}
+
+impl BackgroundTask {
+    /// Whether the agent waits on this work, so the thread holds until it ends. Subagents and
+    /// background tasks always hold; a command only when the agent declared it awaited, since it
+    /// may be a dev server left running.
+    pub fn holds_thread(&self) -> bool {
+        self.awaited || matches!(self.kind.as_str(), "subagent" | "background_task")
+    }
 }
 
 impl ThreadShell {
@@ -364,6 +379,15 @@ impl ThreadShell {
         self.latest_user_message_at
             .as_deref()
             .unwrap_or(&self.created_at)
+    }
+
+    /// Holding for background work the agent resumes after, like T3 Code shows as waiting.
+    pub fn is_waiting_on_background(&self) -> bool {
+        self.status != "failed"
+            && self
+                .pending_background_tasks
+                .iter()
+                .any(BackgroundTask::holds_thread)
     }
 
     pub fn needs_attention(&self) -> bool {
@@ -496,6 +520,63 @@ pub struct ThreadRecord {
     pub worktree_path: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
+    /// The agent session whose context the next run continues.
+    #[serde(default)]
+    pub active_provider_thread_id: Option<String>,
+}
+
+/// How much of the model's context window a provider session has filled.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextTokenUsage {
+    pub used_tokens: u64,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
+    #[serde(default)]
+    pub auto_compact_threshold: Option<u64>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// One agent session behind a thread; switching models or forking can start another.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderThread {
+    pub id: String,
+    #[serde(default)]
+    pub app_thread_id: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub first_run_ordinal: Option<u64>,
+    #[serde(default)]
+    pub native_thread_ref: Option<Value>,
+    #[serde(default)]
+    pub provider_session_id: Option<String>,
+    #[serde(default)]
+    pub context_usage: Option<ContextTokenUsage>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+impl ProviderThread {
+    /// The server records a session before the agent starts; it does not take over the thread yet.
+    pub fn is_placeholder(&self) -> bool {
+        self.status == "not_loaded"
+            && self.first_run_ordinal.is_none()
+            && self.native_thread_ref.as_ref().is_none_or(Value::is_null)
+            && self.provider_session_id.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderTurn {
+    pub id: String,
+    #[serde(default)]
+    pub provider_thread_id: Option<String>,
+    #[serde(default)]
+    pub token_usage: Option<ContextTokenUsage>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -674,6 +755,10 @@ pub struct ThreadProjection {
     #[serde(default)]
     pub checkpoints: Vec<Checkpoint>,
     #[serde(default)]
+    pub provider_threads: Vec<ProviderThread>,
+    #[serde(default)]
+    pub provider_turns: Vec<ProviderTurn>,
+    #[serde(default)]
     pub turn_items: Vec<TurnItem>,
     #[serde(default)]
     pub visible_turn_items: Vec<VisibleTurnItem>,
@@ -703,6 +788,8 @@ pub enum ThreadEvent {
     RuntimeRequestUpdated(RuntimeRequest),
     TurnItemUpdated(TurnItem),
     CheckpointUpdated(Checkpoint),
+    ProviderThreadUpdated(ProviderThread),
+    ProviderTurnUpdated(ProviderTurn),
     Other(String),
 }
 
@@ -758,6 +845,8 @@ impl ThreadEvent {
             "message.updated" => Self::MessageUpdated(decode(payload, kind)?),
             "runtime-request.updated" => Self::RuntimeRequestUpdated(decode(payload, kind)?),
             "turn-item.updated" => Self::TurnItemUpdated(decode(payload, kind)?),
+            "provider-thread.updated" => Self::ProviderThreadUpdated(decode(payload, kind)?),
+            "provider-turn.updated" => Self::ProviderTurnUpdated(decode(payload, kind)?),
             "checkpoint.captured" | "checkpoint.updated"
                 if payload.is_some_and(|payload| payload.get("scopeId").is_some()) =>
             {
@@ -793,6 +882,120 @@ impl ApprovalDecision {
             Self::Accept => "accept",
             Self::AcceptForSession => "acceptForSession",
             Self::Decline => "decline",
+        }
+    }
+}
+
+/// The user's answer to a `secret_request` card. The server keeps the value; the thread and the
+/// agent only learn whether it was saved.
+#[derive(Clone, PartialEq, Eq)]
+pub enum SecretAnswer {
+    /// The value of a card that asks for one secret.
+    Save(String),
+    /// The values of a card with several fields, by field name.
+    SaveValues(Vec<(String, String)>),
+    Decline,
+}
+
+impl SecretAnswer {
+    pub fn request(&self, thread_id: &str, turn_item_id: &str) -> Value {
+        let answer = match self {
+            Self::Save(secret) => json!({ "type": "save", "secret": secret }),
+            Self::SaveValues(values) => json!({
+                "type": "save",
+                "values": values
+                    .iter()
+                    .map(|(name, value)| (name.clone(), Value::String(value.clone())))
+                    .collect::<Map<String, Value>>(),
+            }),
+            Self::Decline => json!({ "type": "decline" }),
+        };
+        json!({ "threadId": thread_id, "turnItemId": turn_item_id, "answer": answer })
+    }
+}
+
+/// Deliberately leaves the values out so they never reach a log.
+impl std::fmt::Debug for SecretAnswer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Save(_) => formatter.write_str("Save(..)"),
+            Self::SaveValues(values) => formatter
+                .debug_tuple("SaveValues")
+                .field(&values.iter().map(|(name, _)| name).collect::<Vec<_>>())
+                .finish(),
+            Self::Decline => formatter.write_str("Decline"),
+        }
+    }
+}
+
+/// The user's answer to a `feedback_request` card: a report the agent drafted for the T3 team.
+pub fn feedback_answer(
+    thread_id: &str,
+    turn_item_id: &str,
+    send: bool,
+    include_conversation: bool,
+) -> Value {
+    let mut request = json!({
+        "threadId": thread_id,
+        "turnItemId": turn_item_id,
+        "answer": if send { "send" } else { "decline" },
+    });
+    if send && include_conversation {
+        request["includeConversation"] = json!(true);
+    }
+    request
+}
+
+/// The access an agent on this environment gets on another one it is linked to.
+pub const LINK_ACCESS_LEVELS: [&str; 5] = [
+    "read-only",
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+];
+
+/// The user's answer to a `link_request` card, which asks to link another T3 Code environment.
+#[derive(Clone, PartialEq, Eq)]
+pub enum LinkAnswer {
+    /// Links the environment at `url` with a pairing code created there.
+    Link {
+        url: String,
+        access: String,
+        pairing_code: String,
+    },
+    Decline,
+}
+
+impl LinkAnswer {
+    pub fn request(&self, thread_id: &str, turn_item_id: &str) -> Value {
+        let answer = match self {
+            Self::Link {
+                url,
+                access,
+                pairing_code,
+            } => json!({
+                "type": "link",
+                "urls": [url],
+                "access": access,
+                "pairingCode": pairing_code,
+            }),
+            Self::Decline => json!({ "type": "decline" }),
+        };
+        json!({ "threadId": thread_id, "turnItemId": turn_item_id, "answer": answer })
+    }
+}
+
+/// Deliberately leaves the pairing code out so it never reaches a log.
+impl std::fmt::Debug for LinkAnswer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Link { url, access, .. } => formatter
+                .debug_struct("Link")
+                .field("url", url)
+                .field("access", access)
+                .finish_non_exhaustive(),
+            Self::Decline => formatter.write_str("Decline"),
         }
     }
 }
@@ -1186,7 +1389,7 @@ mod tests {
 
         let other = json!({
             "kind": "event", "sequence": 87,
-            "event": { "type": "provider-turn.updated", "threadId": "t1", "payload": {} },
+            "event": { "type": "plan.updated", "threadId": "t1", "payload": {} },
         });
         assert!(matches!(
             ThreadStreamItem::parse(&other).expect("parses"),
@@ -1316,5 +1519,62 @@ mod tests {
         assert!(reasoning.is_reasoning());
         assert_eq!(reasoning.default_value(), Some(json!("low")));
         assert_eq!(fast.default_value(), Some(json!(false)));
+    }
+
+    #[test]
+    fn secret_answers_match_the_server_contract() {
+        assert_eq!(
+            SecretAnswer::Save("hunter2".into()).request("t1", "i1"),
+            json!({ "threadId": "t1", "turnItemId": "i1",
+                    "answer": { "type": "save", "secret": "hunter2" } })
+        );
+        assert_eq!(
+            SecretAnswer::SaveValues(vec![("email".into(), "a@b.c".into())]).request("t1", "i1")["answer"],
+            json!({ "type": "save", "values": { "email": "a@b.c" } })
+        );
+        assert_eq!(
+            SecretAnswer::Decline.request("t1", "i1")["answer"],
+            json!({ "type": "decline" })
+        );
+        assert_eq!(
+            format!("{:?}", SecretAnswer::Save("hunter2".into())),
+            "Save(..)"
+        );
+    }
+
+    #[test]
+    fn feedback_and_link_answers_match_the_server_contract() {
+        assert_eq!(
+            feedback_answer("t1", "i1", true, true),
+            json!({ "threadId": "t1", "turnItemId": "i1", "answer": "send",
+                    "includeConversation": true })
+        );
+        assert_eq!(
+            feedback_answer("t1", "i1", false, true),
+            json!({ "threadId": "t1", "turnItemId": "i1", "answer": "decline" })
+        );
+        let link = LinkAnswer::Link {
+            url: "https://box.example".into(),
+            access: "approval-required".into(),
+            pairing_code: "SUPERVISED-ABCD".into(),
+        };
+        assert_eq!(
+            link.request("t1", "i1")["answer"],
+            json!({ "type": "link", "urls": ["https://box.example"],
+                    "access": "approval-required", "pairingCode": "SUPERVISED-ABCD" })
+        );
+        assert!(!format!("{link:?}").contains("ABCD"));
+    }
+
+    #[test]
+    fn awaited_background_work_holds_the_thread() {
+        let task = |value: Value| {
+            serde_json::from_value::<BackgroundTask>(value)
+                .unwrap_or_else(|error| panic!("{error}"))
+        };
+        assert!(!task(json!({ "taskId": "t1", "kind": "command" })).holds_thread());
+        assert!(task(json!({ "taskId": "t1", "kind": "command", "awaited": true })).holds_thread());
+        assert!(task(json!({ "taskId": "t2", "kind": "subagent" })).holds_thread());
+        assert!(!task(json!({ "taskId": "t3", "kind": "monitor" })).holds_thread());
     }
 }

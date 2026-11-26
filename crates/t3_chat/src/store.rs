@@ -18,7 +18,7 @@ use std::{
 use t3_client::{
     ConnectError, ConnectOptions, Connection, ModelSelection,
     local::{LocalServer, TokenFile},
-    protocol::{ChatAttachment, ProviderInfo, ShellStreamItem, TurnItem},
+    protocol::{ChatAttachment, LinkAnswer, ProviderInfo, SecretAnswer, ShellStreamItem, TurnItem},
     rpc::RpcError,
     state::{Applied, ShellState},
 };
@@ -170,7 +170,7 @@ impl T3Store {
             for thread in self.shell.project_threads(&project.id) {
                 let activity = if thread.needs_attention() {
                     AgentActivity::NeedsInput
-                } else if thread.is_working() {
+                } else if thread.is_working() || thread.is_waiting_on_background() {
                     AgentActivity::Working
                 } else {
                     continue;
@@ -490,6 +490,61 @@ impl T3Store {
         )
     }
 
+    pub fn answer_secret_request(
+        &self,
+        thread_id: String,
+        item_id: String,
+        answer: SecretAnswer,
+        cx: &App,
+    ) -> Task<Result<()>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        cx.background_spawn(async move {
+            connection
+                .answer_secret_request(&thread_id, &item_id, &answer)
+                .await
+                .map_err(|error| anyhow!(card_answer_failure(&error)))
+        })
+    }
+
+    pub fn answer_feedback_request(
+        &self,
+        thread_id: String,
+        item_id: String,
+        send: bool,
+        include_conversation: bool,
+        cx: &App,
+    ) -> Task<Result<()>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        cx.background_spawn(async move {
+            connection
+                .answer_feedback_request(&thread_id, &item_id, send, include_conversation)
+                .await
+                .map_err(|error| anyhow!(card_answer_failure(&error)))
+        })
+    }
+
+    pub fn answer_link_request(
+        &self,
+        thread_id: String,
+        item_id: String,
+        answer: LinkAnswer,
+        cx: &App,
+    ) -> Task<Result<()>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        cx.background_spawn(async move {
+            connection
+                .answer_link_request(&thread_id, &item_id, &answer)
+                .await
+                .map_err(|error| anyhow!(card_answer_failure(&error)))
+        })
+    }
+
     pub fn upload_attachment(
         &self,
         name: String,
@@ -536,4 +591,44 @@ fn token_path(server: &LocalServer) -> std::path::PathBuf {
     paths::data_dir()
         .join("t3")
         .join(format!("token-{:016x}", hasher.finish()))
+}
+
+/// The errors of answering a card carry only a reason; T3 Code's apps word the message.
+fn card_answer_failure(error: &RpcError) -> SharedString {
+    let RpcError::Failure { error: failure, .. } = error else {
+        return error.to_string().into();
+    };
+    let reason = failure.get("reason").and_then(Value::as_str).unwrap_or("");
+    match failure.get("_tag").and_then(Value::as_str) {
+        Some("SecretRequestError") => match reason {
+            "load_failed" => t!("Could not load the secret request."),
+            "not_found" => t!("This secret request no longer exists."),
+            "already_answered" => t!("This secret request was already answered."),
+            "fields_mismatch" => {
+                t!("This request asks for different values. Update the app and try again.")
+            }
+            "agent_stopped" => {
+                t!("The agent that asked has stopped, so this secret can't be used.")
+            }
+            "store_failed" => t!("Could not store the secret."),
+            "record_failed" => t!("Saved the secret, but could not update the request."),
+            _ => t!("Could not answer the request. Try again."),
+        },
+        Some("AgentFeedbackRequestError") => match reason {
+            "load_failed" => t!("Could not load the feedback report."),
+            "not_found" => t!("This feedback report no longer exists."),
+            "already_answered" => t!("This feedback report was already answered."),
+            "feedback_off" => t!("Agent feedback is off, so this report was not sent."),
+            "record_failed" => t!("Could not record your answer."),
+            _ => t!("Could not answer the request. Try again."),
+        },
+        Some("PeerLinkRequestError") => match reason {
+            "load_failed" => t!("Could not load the link request."),
+            "not_found" => t!("This link request no longer exists."),
+            "already_answered" => t!("This link request was already answered."),
+            "record_failed" => t!("Could not update the link request."),
+            _ => t!("Could not answer the request. Try again."),
+        },
+        _ => error.to_string().into(),
+    }
 }

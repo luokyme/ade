@@ -52,6 +52,14 @@ impl TaskKind {
         }
     }
 
+    fn waiting_label(self) -> SharedString {
+        match self {
+            Self::Command => t!("Waiting on a command"),
+            Self::Subagent => t!("Waiting on an agent"),
+            Self::Other => t!("Waiting on a background task"),
+        }
+    }
+
     fn untitled(self) -> SharedString {
         match self {
             Self::Command => t!("Background command"),
@@ -190,10 +198,17 @@ impl ThreadView {
 
     pub(super) fn render_background_indicator(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let rows = self.background_rows(cx);
-        let label: SharedString = match rows.as_slice() {
-            [] => return None,
-            [row] => row.kind.running_label(),
-            rows => t!("{count} tasks running", count = rows.len()),
+        // Like T3 Code: work the agent resumes after reads as waiting, the rest as running.
+        let waiting = self
+            .background_tasks(cx)
+            .iter()
+            .any(BackgroundTask::holds_thread);
+        let label: SharedString = match (rows.as_slice(), waiting) {
+            ([], _) => return None,
+            ([row], true) => row.kind.waiting_label(),
+            ([row], false) => row.kind.running_label(),
+            (rows, true) => t!("Waiting on {count} tasks", count = rows.len()),
+            (rows, false) => t!("{count} tasks running", count = rows.len()),
         };
         let now = chrono::Utc::now();
         let elapsed = rows
