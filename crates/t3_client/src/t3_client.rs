@@ -123,6 +123,137 @@ impl Connection {
             .ok_or_else(|| RpcError::Protocol("launchThread returned no thread id".into()))
     }
 
+    /// Streams a running command's output. Each frame is `{ kind: "replace" | "append", text,
+    /// truncated, running }`; the stream ends after a frame with `running: false`.
+    pub fn subscribe_command_output(
+        &self,
+        thread_id: &str,
+        item_id: &str,
+    ) -> Result<Subscription, RpcError> {
+        self.rpc.subscribe(
+            methods::SUBSCRIBE_COMMAND_OUTPUT,
+            json!({ "threadId": thread_id, "itemId": item_id }),
+        )
+    }
+
+    /// Uploads a file for a message to carry. Images go to agents as images, the rest as files
+    /// they can read.
+    pub async fn upload_attachment(
+        &self,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> anyhow::Result<protocol::ChatAttachment> {
+        let (mime_type, is_image) = protocol::attachment_media_type(name);
+        let size_bytes = bytes.len() as u64;
+        let limit = if is_image {
+            protocol::MAX_IMAGE_BYTES
+        } else {
+            protocol::MAX_FILE_BYTES
+        };
+        anyhow::ensure!(size_bytes > 0, "{name} is empty");
+        anyhow::ensure!(
+            size_bytes <= limit,
+            "{name} is larger than the {} MB T3 Code accepts",
+            limit / 1024 / 1024
+        );
+        let kind = if is_image { "image" } else { "file" };
+        let ticket = self
+            .rpc
+            .request(
+                methods::ATTACHMENTS_CREATE_UPLOAD_URL,
+                json!({ "type": kind, "name": name, "mimeType": mime_type, "sizeBytes": size_bytes }),
+            )
+            .await?;
+        let attachment_id = ticket
+            .get("attachmentId")
+            .and_then(Value::as_str)
+            .context("the upload ticket has no attachment id")?
+            .to_string();
+        let relative_url = ticket
+            .get("relativeUrl")
+            .and_then(Value::as_str)
+            .context("the upload ticket has no address")?;
+        let url = self.origin.join(relative_url)?;
+        let response = reqwest::Client::new()
+            .post(url)
+            .header(reqwest::header::CONTENT_LENGTH, size_bytes)
+            .header(reqwest::header::CONTENT_TYPE, &mime_type)
+            .body(bytes)
+            .send()
+            .await
+            .context("uploading the attachment")?;
+        let status = response.status();
+        if !status.is_success() {
+            let detail = response.text().await.unwrap_or_default();
+            anyhow::bail!("T3 Code refused {name} ({status}): {detail}");
+        }
+        Ok(protocol::ChatAttachment {
+            kind: kind.to_string(),
+            id: attachment_id,
+            name: name.to_string(),
+            mime_type,
+            size_bytes,
+        })
+    }
+
+    /// Downloads the bytes of a file a message carried, through the short-lived address the server
+    /// issues for it.
+    pub async fn download_attachment(
+        &self,
+        attachment_id: &str,
+        name: &str,
+        mime_type: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        let ticket = self
+            .rpc
+            .request(
+                methods::ASSETS_CREATE_URL,
+                json!({
+                    "resource": {
+                        "_tag": "attachment",
+                        "attachmentId": attachment_id,
+                        "fileName": name,
+                        "mimeType": mime_type,
+                        "disposition": "inline",
+                    }
+                }),
+            )
+            .await?;
+        let relative_url = ticket
+            .get("relativeUrl")
+            .and_then(Value::as_str)
+            .context("the asset ticket has no address")?;
+        let response = reqwest::Client::new()
+            .get(self.origin.join(relative_url)?)
+            .send()
+            .await
+            .context("downloading the attachment")?;
+        let status = response.status();
+        anyhow::ensure!(status.is_success(), "T3 Code refused {name} ({status})");
+        Ok(response.bytes().await?.to_vec())
+    }
+
+    /// Fetches one timeline item in full, including output the thread stream left out.
+    pub async fn get_turn_item(
+        &self,
+        thread_id: &str,
+        item_id: &str,
+    ) -> Result<Option<protocol::TurnItem>, RpcError> {
+        let result = self
+            .rpc
+            .request(
+                methods::GET_TURN_ITEM,
+                json!({ "threadId": thread_id, "itemId": item_id }),
+            )
+            .await?;
+        match result.get("item") {
+            None | Some(Value::Null) => Ok(None),
+            Some(item) => serde_json::from_value(item.clone())
+                .map(Some)
+                .map_err(|error| RpcError::Protocol(format!("unreadable turn item: {error}"))),
+        }
+    }
+
     /// Adds a folder as a project and returns the project's id.
     pub async fn create_project(
         &self,

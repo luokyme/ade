@@ -22,7 +22,7 @@ pub use commit_message::{
 use command_palette_hooks::CommandPaletteFilter;
 use futures::FutureExt as _;
 use gpui::{
-    App, AppContext as _, EntityId, PromptButton, PromptLevel, TaskExt as _, WindowHandle, actions,
+    App, EntityId, PromptButton, PromptLevel, TaskExt as _, WindowHandle, actions,
 };
 use i18n::t;
 use serde::{Deserialize, Serialize};
@@ -112,11 +112,7 @@ pub fn init(shell_env_loaded: Option<futures::channel::oneshot::Receiver<()>>, c
         cx.set_global(session::ShellEnvLoaded(loaded.shared()));
     }
     cx.set_global(workspace::QuitWarning(session::quit_warning));
-    let changes = cx.new(|_| workspace::AgentActivityChanges);
-    cx.set_global(workspace::ProjectAgentActivity {
-        activity: session::project_agent_activity,
-        changes,
-    });
+    workspace::register_agent_activity_source(session::project_agent_activity, cx);
     agent_panel::init(cx);
     chat_panel::init(cx);
     watch_enabled(cx);

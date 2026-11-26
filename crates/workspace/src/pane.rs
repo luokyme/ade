@@ -4319,11 +4319,16 @@ fn default_render_tab_bar_buttons(
         Some(_) => (false, pane.items_len() > 1),
         None => (false, false),
     };
+    let item_buttons = match pane.active_item() {
+        Some(active_item) => active_item.tab_bar_buttons(window, cx),
+        None => Vec::new(),
+    };
     // Ideally we would return a vec of elements here to pass directly to the [TabBar]'s
     // `end_slot`, but due to needing a view here that isn't possible.
     let right_children = h_flex()
         // Instead we need to replicate the spacing from the [TabBar]'s `end_slot` here.
         .gap(DynamicSpacing::Base04.rems(cx))
+        .children(item_buttons)
         .child(
             PopoverMenu::new("pane-tab-bar-split")
                 .trigger_with_tooltip(

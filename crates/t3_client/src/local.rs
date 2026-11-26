@@ -258,6 +258,9 @@ impl TokenFile {
         options.mode(0o600);
         let mut file = options.open(&self.path).await?;
         tokio::io::AsyncWriteExt::write_all(&mut file, token.as_bytes()).await?;
+        // Tokio finishes file writes in the background; without a flush, reading the token right
+        // after saving it can find the file still empty.
+        tokio::io::AsyncWriteExt::flush(&mut file).await?;
         Ok(())
     }
 }

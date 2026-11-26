@@ -1,20 +1,25 @@
 use anyhow::{Result, anyhow};
+use db::kvp::KeyValueStore;
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
 use i18n::t;
 use serde_json::Value;
 use std::{
     hash::{Hash as _, Hasher as _},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
 use t3_client::{
-    ConnectError, ConnectOptions, Connection,
+    ConnectError, ConnectOptions, Connection, ModelSelection,
     local::{LocalServer, TokenFile},
-    protocol::{ProviderInfo, ShellStreamItem},
+    protocol::{ChatAttachment, ProviderInfo, ShellStreamItem, TurnItem},
     rpc::RpcError,
     state::{Applied, ShellState},
 };
+use util::ResultExt as _;
+use workspace::AgentActivity;
 
+const LAST_MODEL_SELECTION_KEY: &str = "t3_chat_last_model_selection";
 const RECONNECT_DELAYS: &[Duration] = &[
     Duration::from_secs(1),
     Duration::from_secs(3),
@@ -37,6 +42,28 @@ struct GlobalStore(Entity<T3Store>);
 
 impl Global for GlobalStore {}
 
+fn announce_activity_changes(store: &Entity<T3Store>, cx: &mut App) {
+    let Some(changes) = workspace::agent_activity_changes(cx) else {
+        return;
+    };
+    let mut last_seen = Vec::new();
+    cx.observe(store, move |store, cx| {
+        let activities = store.read(cx).thread_activities();
+        if activities != last_seen {
+            last_seen = activities;
+            changes.update(cx, |_, cx| cx.notify());
+        }
+    })
+    .detach();
+}
+
+pub(crate) fn project_agent_activity(roots: &[PathBuf], cx: &App) -> Option<AgentActivity> {
+    cx.try_global::<GlobalStore>()?
+        .0
+        .read(cx)
+        .agent_activity_in(roots)
+}
+
 /// The connection to the local T3 Code server, shared by every window.
 pub struct T3Store {
     status: Status,
@@ -45,6 +72,8 @@ pub struct T3Store {
     /// Bumped on every new connection, so views know to subscribe again.
     generation: usize,
     shell: ShellState,
+    last_model_selection: Option<ModelSelection>,
+    save_model_selection: Option<Task<()>>,
     /// A server Ade started, which stops when Ade quits.
     started_server: Option<tokio::process::Child>,
     reconnect_attempt: usize,
@@ -58,18 +87,54 @@ impl T3Store {
         if let Some(store) = cx.try_global::<GlobalStore>() {
             return store.0.clone();
         }
-        let store = cx.new(|_| Self::new(LocalServer::discover()));
+        let store = cx.new(|cx| Self::new(LocalServer::discover(), cx));
         cx.set_global(GlobalStore(store.clone()));
+        announce_activity_changes(&store, cx);
         store
     }
 
-    fn new(server: LocalServer) -> Self {
+    /// The most urgent activity among the threads of the projects rooted at `roots`.
+    pub fn agent_activity_in(&self, roots: &[PathBuf]) -> Option<AgentActivity> {
+        self.thread_activities()
+            .into_iter()
+            .filter(|(root, _, _)| roots.iter().any(|candidate| candidate == root))
+            .map(|(_, _, activity)| activity)
+            .max()
+    }
+
+    fn thread_activities(&self) -> Vec<(PathBuf, String, AgentActivity)> {
+        let mut activities = Vec::new();
+        for project in &self.shell.projects {
+            let root = PathBuf::from(&project.workspace_root);
+            for thread in self.shell.project_threads(&project.id) {
+                let activity = if thread.needs_attention() {
+                    AgentActivity::NeedsInput
+                } else if thread.is_working() {
+                    AgentActivity::Working
+                } else {
+                    continue;
+                };
+                activities.push((root.clone(), thread.id.clone(), activity));
+            }
+        }
+        activities.sort_by(|a, b| a.1.cmp(&b.1));
+        activities
+    }
+
+    fn new(server: LocalServer, cx: &App) -> Self {
+        let last_model_selection = KeyValueStore::global(cx)
+            .read_kvp(LAST_MODEL_SELECTION_KEY)
+            .log_err()
+            .flatten()
+            .and_then(|value| serde_json::from_str(&value).log_err());
         Self {
             status: Status::Idle,
             server,
             connection: None,
             generation: 0,
             shell: ShellState::default(),
+            last_model_selection,
+            save_model_selection: None,
             started_server: None,
             reconnect_attempt: 0,
             connect_task: None,
@@ -99,6 +164,35 @@ impl T3Store {
             .as_ref()
             .map(|connection| connection.config.providers.as_slice())
             .unwrap_or_default()
+    }
+
+    pub fn last_model_selection(&self) -> Option<&ModelSelection> {
+        self.last_model_selection.as_ref().filter(|selection| {
+            self.providers().iter().any(|provider| {
+                provider.is_ready()
+                    && provider.instance_id == selection.instance_id
+                    && provider.model(&selection.model).is_some()
+            })
+        })
+    }
+
+    pub fn remember_model_selection(&mut self, selection: &ModelSelection, cx: &App) {
+        self.last_model_selection = Some(selection.clone());
+
+        let selection = selection.clone();
+        let database = KeyValueStore::global(cx);
+        let previous_save = self.save_model_selection.take();
+        self.save_model_selection = Some(cx.background_spawn(async move {
+            if let Some(previous_save) = previous_save {
+                previous_save.await;
+            }
+            if let Some(value) = serde_json::to_string(&selection).log_err() {
+                database
+                    .write_kvp(LAST_MODEL_SELECTION_KEY.into(), value)
+                    .await
+                    .log_err();
+            }
+        }));
     }
 
     pub fn environment_label(&self) -> Option<SharedString> {
@@ -276,6 +370,47 @@ impl T3Store {
             return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
         };
         cx.background_spawn(async move { Ok(connection.launch_thread(input).await?) })
+    }
+
+    pub fn get_turn_item(
+        &self,
+        thread_id: String,
+        item_id: String,
+        cx: &App,
+    ) -> Task<Result<Option<TurnItem>>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        cx.background_spawn(async move { Ok(connection.get_turn_item(&thread_id, &item_id).await?) })
+    }
+
+    pub fn upload_attachment(
+        &self,
+        name: String,
+        bytes: Vec<u8>,
+        cx: &App,
+    ) -> Task<Result<ChatAttachment>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            connection.upload_attachment(&name, bytes).await
+        })
+    }
+
+    pub fn download_attachment(
+        &self,
+        attachment_id: String,
+        name: String,
+        mime_type: String,
+        cx: &App,
+    ) -> Task<Result<Vec<u8>>> {
+        let Some(connection) = self.connection.clone() else {
+            return Task::ready(Err(anyhow!(t!("Not connected to T3 Code"))));
+        };
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            connection.download_attachment(&attachment_id, &name, &mime_type).await
+        })
     }
 
     pub fn create_project(&self, title: String, root: String, cx: &App) -> Task<Result<String>> {

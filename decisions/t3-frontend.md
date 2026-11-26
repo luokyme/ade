@@ -10,3 +10,12 @@
 - 否决：继续只靠 Ade 自己的 `agent_harness` 跟进智能体协议，维护负担仍在 Ade 和上游 Wu 身上，也没有手机端。分叉或修改 T3 Code server，会失去跟随官方维护的意义。
 - 依据：用户 2026-11-25 明确提出“把当前ade的后端直接调用t3, 本项目只做对应的前端”，确认“是ade实现t3的前端部分吧？仿佛是t3的另一个前端一样”，并要求“现在开始开发，但暂时先不要移除ade的'对话'功能”。
 - 关联：`crates/t3_client`、`crates/t3_chat`、`crates/agent_chat`、`crates/agent_harness`。
+
+### T3-002 T3 Code 对话可放在侧边面板或编辑区
+
+- 状态：有效
+- 决策：T3 Code 对话不限于右侧停靠面板，也可以作为编辑区的标签页打开，并能在面板和编辑区之间来回移动。
+- 理由：只放在右侧面板时，对话可用宽度受限，也无法和编辑器标签页一起排布。
+- 否决：只在右侧面板显示对话。
+- 依据：用户 2026-11-25 明确提出“我需要对话窗口不总是只在右侧窗口里，而是可以放到编辑区”。
+- 关联：`crates/t3_chat/src/tab.rs`、`crates/t3_chat/src/panel.rs`、`t3_chat::OpenInEditor`、`t3_chat::MoveToPanel`。

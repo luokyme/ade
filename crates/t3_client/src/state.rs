@@ -3,7 +3,7 @@
 //! the record with the same id.
 
 use crate::protocol::{
-    Message, ProjectShell, Run, RunAttempt, RuntimeRequest, ShellStreamItem, ThreadEvent,
+    Checkpoint, Message, ProjectShell, Run, RunAttempt, RuntimeRequest, ShellStreamItem, ThreadEvent,
     ThreadRecord, ThreadShell, ThreadStreamItem, TurnItem,
 };
 use std::collections::HashMap;
@@ -46,6 +46,19 @@ impl ShellState {
                     .into_iter()
                     .map(|thread| (thread.id.clone(), thread))
                     .collect();
+                Applied::Changed
+            }
+            ShellStreamItem::ProjectIdentities(snapshot) => {
+                for project in snapshot.projects {
+                    match self
+                        .projects
+                        .iter_mut()
+                        .find(|known| known.id == project.id)
+                    {
+                        Some(known) => *known = project,
+                        None => self.projects.push(project),
+                    }
+                }
                 Applied::Changed
             }
             ShellStreamItem::ProjectUpdated { sequence, project } => {
@@ -113,7 +126,9 @@ impl ShellState {
             .find(|project| std::path::Path::new(&project.workspace_root) == root)
     }
 
-    /// The project's top-level threads, pinned first, then most recently updated.
+    /// The project's top-level threads: pinned first, then running ones, then the rest. Within
+    /// each group the thread the user wrote to most recently comes first. Sorting by `updated_at`
+    /// would reshuffle running threads on every agent event.
     pub fn project_threads(&self, project_id: &str) -> Vec<&ThreadShell> {
         let mut threads = self
             .threads
@@ -128,7 +143,8 @@ impl ShellState {
             b.pinned_at
                 .is_some()
                 .cmp(&a.pinned_at.is_some())
-                .then_with(|| b.updated_at.cmp(&a.updated_at))
+                .then_with(|| b.is_working().cmp(&a.is_working()))
+                .then_with(|| b.last_activity_key().cmp(a.last_activity_key()))
                 .then_with(|| a.id.cmp(&b.id))
         });
         threads
@@ -152,6 +168,7 @@ pub struct ThreadState {
     pub attempts: Vec<RunAttempt>,
     pub messages: Vec<Message>,
     pub runtime_requests: Vec<RuntimeRequest>,
+    pub checkpoints: Vec<Checkpoint>,
     pub inherited: Vec<InheritedItem>,
     items: Vec<TurnItem>,
 }
@@ -167,6 +184,7 @@ impl ThreadState {
             attempts: Vec::new(),
             messages: Vec::new(),
             runtime_requests: Vec::new(),
+            checkpoints: Vec::new(),
             inherited: Vec::new(),
             items: Vec::new(),
         }
@@ -193,6 +211,7 @@ impl ThreadState {
                 self.attempts = projection.attempts;
                 self.messages = projection.messages;
                 self.runtime_requests = projection.runtime_requests;
+                self.checkpoints = projection.checkpoints;
                 self.inherited = projection
                     .visible_turn_items
                     .into_iter()
@@ -261,6 +280,9 @@ impl ThreadState {
                     }
                 }
             }
+            ThreadEvent::CheckpointUpdated(checkpoint) => {
+                upsert(&mut self.checkpoints, checkpoint, |checkpoint| &checkpoint.id)
+            }
             ThreadEvent::Other(_) => return Applied::Unchanged,
         }
         Applied::Changed
@@ -286,7 +308,16 @@ impl ThreadState {
         let queued_input = item.kind == "user_message"
             && item.str_field("inputIntent") == Some("queued_turn")
             && matches!(run.status.as_str(), "queued" | "cancelled");
-        !queued_input && !self.is_superseded_interrupt(item)
+        !queued_input && !self.is_superseded_interrupt(item) && !self.is_answered_interrupt(item)
+    }
+
+    /// The interrupt request and its result carry the same message, so only the result stays.
+    fn is_answered_interrupt(&self, item: &TurnItem) -> bool {
+        item.kind == "run_interrupt_request"
+            && item.run_id.is_some()
+            && self.items.iter().any(|candidate| {
+                candidate.kind == "run_interrupt_result" && candidate.run_id == item.run_id
+            })
     }
 
     fn is_superseded_interrupt(&self, item: &TurnItem) -> bool {
@@ -346,6 +377,28 @@ impl ThreadState {
                 (run, text)
             })
             .collect()
+    }
+
+    /// The checkpoint to return to so that `run_id` and everything after it is undone.
+    pub fn checkpoint_before_run(&self, run_id: &str) -> Option<&Checkpoint> {
+        let run = self.runs.iter().find(|run| run.id == run_id)?;
+        let scope = self
+            .checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.run_id.as_deref() == Some(run_id))
+            .or_else(|| {
+                self.checkpoints
+                    .iter()
+                    .find(|checkpoint| checkpoint.ordinal_within_scope == 0)
+            })?
+            .scope_id
+            .clone();
+        let target = run.ordinal.checked_sub(1)?;
+        self.checkpoints.iter().find(|checkpoint| {
+            checkpoint.scope_id == scope
+                && checkpoint.ordinal_within_scope == target
+                && checkpoint.status == "ready"
+        })
     }
 
     pub fn pending_request(&self, request_id: &str) -> Option<&RuntimeRequest> {
@@ -480,6 +533,27 @@ mod tests {
     }
 
     #[test]
+    fn a_stopped_run_shows_one_notice() {
+        let mut state = ThreadState::new("t1");
+        let notice = json!({ "message": "Stopped by user" });
+        state.apply(snapshot(
+            vec![
+                item("a", 1, "user_message", json!({})),
+                item("request", 2, "run_interrupt_request", notice.clone()),
+            ],
+            vec![json!({ "id": "r1", "ordinal": 1, "status": "running" })],
+        ));
+        assert_eq!(timeline_ids(&state), ["a", "request"]);
+
+        state.apply(event(
+            11,
+            "turn-item.updated",
+            item("result", 3, "run_interrupt_result", notice),
+        ));
+        assert_eq!(timeline_ids(&state), ["a", "result"]);
+    }
+
+    #[test]
     fn queued_messages_leave_the_timeline_until_their_run_starts() {
         let mut state = ThreadState::new("t1");
         let queued_message = json!({
@@ -515,6 +589,33 @@ mod tests {
     }
 
     #[test]
+    fn rewinding_a_run_returns_to_the_checkpoint_before_it() {
+        let mut state = ThreadState::new("t1");
+        state.apply(snapshot(
+            vec![],
+            vec![
+                json!({ "id": "r1", "ordinal": 1, "status": "completed" }),
+                json!({ "id": "r2", "ordinal": 2, "status": "completed" }),
+            ],
+        ));
+        let checkpoint = |ordinal: u64, run: Option<&str>| {
+            json!({ "id": format!("c{ordinal}"), "scopeId": "root", "runId": run,
+                    "ordinalWithinScope": ordinal, "status": "ready" })
+        };
+        for (sequence, payload) in [
+            (11, checkpoint(0, None)),
+            (12, checkpoint(1, Some("r1"))),
+            (13, checkpoint(2, Some("r2"))),
+        ] {
+            state.apply(event(sequence, "checkpoint.captured", payload));
+        }
+        let id = |run| state.checkpoint_before_run(run).map(|checkpoint| checkpoint.id.as_str());
+        assert_eq!(id("r1"), Some("c0"));
+        assert_eq!(id("r2"), Some("c1"));
+        assert_eq!(id("missing"), None);
+    }
+
+    #[test]
     fn rolled_back_runs_hide_their_items() {
         let mut state = ThreadState::new("t1");
         state.apply(snapshot(
@@ -538,8 +639,14 @@ mod tests {
                 "snapshot": {
                     "snapshotSequence": 3,
                     "threads": [
-                        { "id": "old", "projectId": "p", "title": "Old", "updatedAt": "2026-01-01" },
-                        { "id": "new", "projectId": "p", "title": "New", "updatedAt": "2026-02-01" },
+                        { "id": "old", "projectId": "p", "title": "Old", "updatedAt": "2026-09-01",
+                          "latestUserMessageAt": "2026-01-01" },
+                        { "id": "new", "projectId": "p", "title": "New", "updatedAt": "2026-02-01",
+                          "latestUserMessageAt": "2026-02-01" },
+                        { "id": "busy", "projectId": "p", "title": "Busy", "updatedAt": "2026-01-01",
+                          "activeRunId": "r", "latestUserMessageAt": "2026-01-15" },
+                        { "id": "busier", "projectId": "p", "title": "Busier", "updatedAt": "2026-01-01",
+                          "activeRunId": "r", "latestUserMessageAt": "2026-01-20" },
                         { "id": "pin", "projectId": "p", "title": "Pin", "updatedAt": "2025-01-01",
                           "pinnedAt": "2026-01-02" },
                         { "id": "child", "projectId": "p", "title": "Sub", "updatedAt": "2026-03-01",
@@ -556,7 +663,7 @@ mod tests {
             .iter()
             .map(|thread| thread.id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(ids, ["pin", "new", "old"]);
+        assert_eq!(ids, ["pin", "busier", "busy", "new", "old"]);
         assert_eq!(
             shell
                 .project_for_root(std::path::Path::new("/work/p"))
@@ -574,5 +681,22 @@ mod tests {
         assert!(!shell.threads.contains_key("old"));
         assert!(shell.archived_threads.contains_key("old"));
         assert_eq!(shell.sequence, 4);
+
+        // The server follows its snapshot with one that only fills in repository identities.
+        shell.apply(
+            ShellStreamItem::parse(&json!({
+                "kind": "snapshot",
+                "resolvedRepositoryIdentityRoots": ["/work/p"],
+                "snapshot": {
+                    "snapshotSequence": 4,
+                    "threads": [],
+                    "archivedThreads": [],
+                    "projects": [{ "id": "p", "title": "P renamed", "workspaceRoot": "/work/p" }],
+                },
+            }))
+            .expect("parses"),
+        );
+        assert_eq!(shell.project_threads("p").len(), 4);
+        assert_eq!(shell.projects[0].title, "P renamed");
     }
 }
