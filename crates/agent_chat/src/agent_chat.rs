@@ -108,7 +108,8 @@ impl AgentKind {
         }
     }
 
-    /// Claude reports its plan usage while it works, so only Codex is asked with the user's login.
+    /// Claude reports its plan usage while it works, so only Codex is asked with the user's login,
+    /// for the active account and for saved ones alike.
     pub(crate) fn polls_plan_usage(self) -> bool {
         self == AgentKind::Codex
     }

@@ -3717,7 +3717,7 @@ impl AgentStore {
                 .map(|accounts| {
                     accounts
                         .iter()
-                        .filter(|account| !account.active)
+                        .filter(|account| !account.active && kind.polls_plan_usage())
                         .map(|account| account.id.clone())
                         .collect()
                 })
