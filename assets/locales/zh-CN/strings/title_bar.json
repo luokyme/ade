@@ -4,6 +4,7 @@
   "Connected to: {host}": "已连接到：{host}",
   "Connecting to: {host}": "正在连接到：{host}",
   "Connection attempt to {host} missed. Retrying...": "{host} 未响应连接检测。正在重试…",
+  "Dev Container": "开发容器",
   "Disconnected from {host}": "已与 {host} 断开连接",
   "Introducing:": "新功能：",
   "It won't show again for this feature": "此功能的公告不会再显示",

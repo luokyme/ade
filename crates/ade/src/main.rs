@@ -613,6 +613,7 @@ fn main() {
         snippet_provider::init(cx);
 
         recent_projects::init(cx);
+        dev_container::init(cx);
 
         load_embedded_fonts(cx);
         #[cfg(target_os = "linux")]
@@ -1077,6 +1078,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
     }
 
     let mut task = None;
+    let dev_container = request.dev_container;
     if !request.open_paths.is_empty() || !request.diff_paths.is_empty() {
         let app_state = app_state.clone();
         let base_open_options = ade::open_options_for_request(
@@ -1092,7 +1094,10 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 &request.diff_paths,
                 request.diff_all,
                 app_state,
-                base_open_options,
+                workspace::OpenOptions {
+                    open_in_dev_container: dev_container,
+                    ..base_open_options
+                },
                 cx,
             )
             .await?;
@@ -1461,6 +1466,13 @@ struct Args {
     #[arg(long, value_name = "USER@DISTRO")]
     wsl: Option<String>,
 
+    /// Open the project in a dev container.
+    ///
+    /// Automatically triggers "Reopen in Dev Container" if a `.devcontainer/`
+    /// configuration is found in the project directory.
+    #[arg(long)]
+    dev_container: bool,
+
     /// Instructs ade to run as a dev server on this machine. (not implemented)
     #[arg(long)]
     dev_server_token: Option<String>,
@@ -1543,6 +1555,7 @@ fn open_request_from_args(args: &Args) -> RawOpenRequest {
         diff_paths,
         diff_all,
         wsl,
+        dev_container: args.dev_container,
         ..Default::default()
     }
 }
