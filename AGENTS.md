@@ -34,6 +34,7 @@
 | [decisions/product-name.md](decisions/product-name.md) | PRODUCT | 产品名称 Ade：crate、动作命名空间、URL scheme、环境变量与目录的统一命名；应用名称和桌面标识不加 Dev 后缀 |
 | [decisions/git-commit-messages.md](decisions/git-commit-messages.md) | COMMIT | Git 面板默认生成中文 Conventional Commits 提交消息 |
 | [decisions/git-panel.md](decisions/git-panel.md) | GITUI | Git 面板分区、历史记录、工作区与历史差异页 |
+| [decisions/build-features.md](decisions/build-features.md) | BUILD | 默认构建包含哪些功能：开发容器默认不编译 |
 | [decisions/t3-frontend.md](decisions/t3-frontend.md) | T3 | 已废止：T3 Code 前端对接（已移除，对话只保留 Ade 自己的“对话”功能） |
 
 # Rust coding guidelines
@@ -172,7 +173,8 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Build guidelines
 
 - Use `./script/clippy` instead of `cargo clippy`
-- 每次完成修改后、交付前，必须在项目根目录执行 `./script/install-linux`，完成编辑器与 CLI 的编译、本机安装以及桌面入口更新。完整发布打包单独使用 `./script/bundle-linux`，不作为本机安装的前置步骤。仅执行 `cargo build -p ade --bin ade`、`cargo check` 或测试不能替代安装交付；用户本次明确要求其他方式或跳过时，遵循该指示。
+- 只编译 release 版本：`cargo build`、`cargo run`、`cargo test`、`cargo check` 等命令一律加 `--release`，与 `./script/install-linux`、`./script/clippy` 共用 `target/release` 的产物，不生成 debug 构建。
+- 每次完成修改后、交付前，必须在项目根目录执行 `./script/install-linux`，完成编辑器与 CLI 的编译、本机安装以及桌面入口更新。完整发布打包单独使用 `./script/bundle-linux`，不作为本机安装的前置步骤。仅执行 `cargo build --release -p ade --bin ade`、`cargo check --release` 或测试不能替代安装交付；用户本次明确要求其他方式或跳过时，遵循该指示。
 - 构建失败时处理与本次修改相关的问题；环境或既有问题阻塞时，明确说明原因，不宣称构建成功。交付时区分源码验证、完整构建、安装和桌面入口更新、应用是否已重启；安装失败必须说明阻塞，不能只构建后宣称已更新。
 
 # Pull request hygiene

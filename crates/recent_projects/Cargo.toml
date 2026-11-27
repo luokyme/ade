@@ -14,6 +14,8 @@ doctest = false
 
 [features]
 default = []
+# Off by default: it pulls in the large `dev_container` crate.
+dev-container = ["dep:dev_container", "dep:extension_host"]
 test-support = ["remote/test-support", "remote_connection/test-support", "project/test-support", "workspace/test-support"]
 
 [dependencies]
@@ -21,9 +23,9 @@ anyhow.workspace = true
 chrono.workspace = true
 askpass.workspace = true
 db.workspace = true
-dev_container.workspace = true
+dev_container = { workspace = true, optional = true }
 editor.workspace = true
-extension_host.workspace = true
+extension_host = { workspace = true, optional = true }
 fs.workspace = true
 futures.workspace = true
 fuzzy_nucleo.workspace = true

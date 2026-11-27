@@ -1,3 +1,4 @@
+#[cfg(feature = "dev-container")]
 mod dev_container_suggest;
 pub mod disconnected_overlay;
 mod remote_connections;
@@ -39,7 +40,10 @@ pub use remote_servers::RemoteServerProjects;
 use settings::{DefaultOpenBehavior, Settings, WorktreeId};
 use workspace::ProjectGroupKey;
 
-use ade_actions::{OpenDevContainer, OpenRecent, OpenRemote};
+#[cfg(feature = "dev-container")]
+use ade_actions::OpenDevContainer;
+use ade_actions::{OpenRecent, OpenRemote};
+#[cfg(feature = "dev-container")]
 use dev_container::{DevContainerContext, find_devcontainer_configs};
 use ui::{
     ButtonLike, ContextMenu, Divider, HighlightedLabel, Indicator, KeyBinding, ListItem,
@@ -518,6 +522,12 @@ pub fn init(cx: &mut App) {
 
     cx.observe_new(DisconnectedOverlay::register).detach();
 
+    #[cfg(feature = "dev-container")]
+    init_dev_container(cx);
+}
+
+#[cfg(feature = "dev-container")]
+fn init_dev_container(cx: &mut App) {
     cx.on_action(|_: &OpenDevContainer, cx| {
         with_active_or_new_workspace(cx, move |workspace, window, cx| {
             if !workspace.project().read(cx).is_local() {
@@ -2852,6 +2862,7 @@ mod tests {
         assert_pinned_to_bottom(&picker, cx, "after redraw");
     }
 
+    #[cfg(feature = "dev-container")]
     #[gpui::test]
     async fn test_open_dev_container_action_with_single_config(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
@@ -2905,6 +2916,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "dev-container")]
     #[gpui::test]
     async fn test_open_dev_container_action_with_multiple_configs(cx: &mut TestAppContext) {
         let app_state = init_test(cx);

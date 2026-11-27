@@ -11,6 +11,7 @@
 - 上游分支图接入 Ade 底部可调整高度的历史区，保留单行提交、现有仓库列表和单文件 diff 默认行为。项目标签拖动沿用 Ade 标题栏布局。相关决策见 [GITUI-001](../decisions/git-panel.md) 和 [TITLEBAR](../decisions/title-bar.md)。
 - 聊天列表缓存兼容 Ade 的归档、侧边会话和时间分隔。保留 Claude Code、Codex、OpenCode 的原有默认权限，新增 Antigravity 沿用上游的 `auto`。ACP 接口适配 Ade 的后台任务停止字段，Markdown 预览保留隐藏代码块的鼠标选区修复。
 - Windows 文件关联图标用 Ade 标识重新生成，ACP 客户端和新增配置沿用 Ade 命名。相关决策见 [PRODUCT](../decisions/product-name.md)。
+- 开发容器按 [BUILD-001](../decisions/build-features.md) 默认不编译：`recent_projects` 和 `ade` 的 `dev-container` 特性控制，`remote_servers.rs`、`recent_projects.rs` 里的相关代码用 `#[cfg(feature = "dev-container")]` 隔开。上游以后改动这些位置时，新增的开发容器代码也要放进同一开关。`remote`、`workspace`、`settings` 里的 Docker 连接类型没有隔开。
 - 开发容器：路径 `crates/wu*` 对应 `crates/ade*`，`wu_actions` 对应 `ade_actions`，远程服务器二进制名用 `ade-remote-server-*`，文案里的 Wu 改为 Ade。`devcontainer.json` 里 `customizations.zed` 键和 `zed-dc` 等容器内部名沿用上游，保持与现有配置文件兼容。
 
 ## 下次同步

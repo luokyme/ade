@@ -7,11 +7,13 @@ use crate::{
 };
 mod filter;
 
+#[cfg(feature = "dev-container")]
 use dev_container::{
     DevContainerConfig, DevContainerContext, dev_container_worktree, find_devcontainer_configs,
     start_dev_container_with_config,
 };
 use editor::Editor;
+#[cfg(feature = "dev-container")]
 use extension_host::ExtensionStore;
 use filter::{FilterData, FilteredServer};
 use futures::{FutureExt, StreamExt as _, channel::oneshot, future::Shared};
@@ -42,16 +44,21 @@ use std::{
 };
 
 use ui::{
-    CommonAnimationExt, HighlightedLabel, IconButtonShape, KeyBinding, ListItem, ListSeparator,
-    ModalHeader, Navigable, NavigableEntry, Tooltip, prelude::*,
+    HighlightedLabel, IconButtonShape, KeyBinding, ListItem, ListSeparator, Navigable,
+    NavigableEntry, Tooltip, prelude::*,
 };
+#[cfg(feature = "dev-container")]
+use ui::{CommonAnimationExt, ModalHeader};
+#[cfg(feature = "dev-container")]
+use util::rel_path::RelPath;
 use util::{
     ResultExt,
     paths::{PathStyle, RemotePathBuf},
-    rel_path::RelPath,
 };
+#[cfg(feature = "dev-container")]
+use workspace::{AppState, OpenLog};
 use workspace::{
-    AppState, DismissDecision, ModalView, MultiWorkspace, OpenLog, OpenOptions, Toast, Workspace,
+    DismissDecision, ModalView, MultiWorkspace, OpenOptions, Toast, Workspace,
     notifications::{DetachAndPromptErr, NotificationId},
     open_remote_project_with_existing_connection,
 };
@@ -65,9 +72,11 @@ pub struct RemoteServerProjects {
     ssh_config_updates: Task<()>,
     ssh_config_servers: BTreeSet<SharedString>,
     create_new_window: bool,
+    #[cfg(feature = "dev-container")]
     dev_container_picker: Option<Entity<Picker<DevContainerPickerDelegate>>>,
     _subscriptions: Vec<Subscription>,
     allow_dismissal: bool,
+    #[cfg(feature = "dev-container")]
     dev_container_task: Option<Task<()>>,
 }
 
@@ -93,6 +102,7 @@ impl CreateRemoteServer {
     }
 }
 
+#[cfg(feature = "dev-container")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum DevContainerCreationProgress {
     SelectingConfig,
@@ -100,6 +110,7 @@ enum DevContainerCreationProgress {
     Error(String),
 }
 
+#[cfg(feature = "dev-container")]
 #[derive(Clone)]
 struct CreateRemoteDevContainer {
     view_logs_entry: NavigableEntry,
@@ -107,6 +118,7 @@ struct CreateRemoteDevContainer {
     progress: DevContainerCreationProgress,
 }
 
+#[cfg(feature = "dev-container")]
 impl CreateRemoteDevContainer {
     fn new(progress: DevContainerCreationProgress, cx: &mut Context<RemoteServerProjects>) -> Self {
         let view_logs_entry = NavigableEntry::focusable(cx);
@@ -181,12 +193,14 @@ struct EditNicknameState {
     editor: Entity<Editor>,
 }
 
+#[cfg(feature = "dev-container")]
 struct DevContainerPickerDelegate {
     selected_index: usize,
     candidates: Vec<DevContainerConfig>,
     matching_candidates: Vec<DevContainerConfig>,
     parent_modal: WeakEntity<RemoteServerProjects>,
 }
+#[cfg(feature = "dev-container")]
 impl DevContainerPickerDelegate {
     fn new(
         candidates: Vec<DevContainerConfig>,
@@ -201,6 +215,7 @@ impl DevContainerPickerDelegate {
     }
 }
 
+#[cfg(feature = "dev-container")]
 impl PickerDelegate for DevContainerPickerDelegate {
     type ListItem = AnyElement;
 
@@ -796,6 +811,7 @@ enum Mode {
     EditNickname(EditNicknameState),
     ProjectPicker(Entity<ProjectPicker>),
     CreateRemoteServer(CreateRemoteServer),
+    #[cfg(feature = "dev-container")]
     CreateRemoteDevContainer(CreateRemoteDevContainer),
     #[cfg(target_os = "windows")]
     AddWslDistro(AddWslDistro),
@@ -812,6 +828,7 @@ impl Mode {
 
 enum RemoteMatch {
     AddServer,
+    #[cfg(feature = "dev-container")]
     AddDevContainer,
     AddWsl,
     Separator,
@@ -847,7 +864,10 @@ struct RemoteServerPickerDelegate {
     matches: Vec<RemoteMatch>,
     selected_index: usize,
     query: String,
+    // Only the "Connect Dev Container" entry reads these.
+    #[cfg_attr(not(feature = "dev-container"), allow(dead_code))]
     has_open_project: bool,
+    #[cfg_attr(not(feature = "dev-container"), allow(dead_code))]
     is_local: bool,
 }
 
@@ -893,13 +913,11 @@ impl RemoteServerPickerDelegate {
     /// keystroke path, see [`Self::update_matches`]); this only reads
     /// [`DefaultState::filtered_servers`].
     fn rebuild_matches(&mut self) {
-        let has_open_project = self.has_open_project;
-        let is_local = self.is_local;
-
         let mut matches = Vec::new();
         if self.query.trim().is_empty() {
             matches.push(RemoteMatch::AddServer);
-            if has_open_project && is_local {
+            #[cfg(feature = "dev-container")]
+            if self.has_open_project && self.is_local {
                 matches.push(RemoteMatch::AddDevContainer);
             }
             if cfg!(target_os = "windows") {
@@ -1153,6 +1171,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                     })
                     .ok();
             }
+            #[cfg(feature = "dev-container")]
             RemoteMatch::AddDevContainer => {
                 remote_server_projects
                     .update(cx, |this, cx| {
@@ -1269,6 +1288,7 @@ impl PickerDelegate for RemoteServerPickerDelegate {
                 t!("Connect SSH Server"),
                 selected,
             )),
+            #[cfg(feature = "dev-container")]
             RemoteMatch::AddDevContainer => Some(self.render_action_item(
                 ix,
                 IconName::Plus,
@@ -1429,6 +1449,7 @@ impl RemoteServerProjects {
         )
     }
 
+    #[cfg(feature = "dev-container")]
     pub fn new_dev_container(
         fs: Arc<dyn Fs>,
         configs: Vec<DevContainerConfig>,
@@ -1544,9 +1565,11 @@ impl RemoteServerProjects {
             ssh_config_updates,
             ssh_config_servers: BTreeSet::new(),
             create_new_window,
+            #[cfg(feature = "dev-container")]
             dev_container_picker: None,
             _subscriptions: vec![settings_subscription, dismiss_subscription],
             allow_dismissal: true,
+            #[cfg(feature = "dev-container")]
             dev_container_task: None,
         }
     }
@@ -1765,6 +1788,7 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
+    #[cfg(feature = "dev-container")]
     fn view_in_progress_dev_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.allow_dismissal = false;
         self.mode = Mode::CreateRemoteDevContainer(CreateRemoteDevContainer::new(
@@ -1893,6 +1917,7 @@ impl RemoteServerProjects {
 
                 self.create_ssh_server(state.address_editor.clone(), window, cx);
             }
+            #[cfg(feature = "dev-container")]
             Mode::CreateRemoteDevContainer(_) => {}
             Mode::EditNickname(state) => {
                 let text = Some(state.editor.read(cx).text(cx)).filter(|text| !text.is_empty());
@@ -1931,6 +1956,7 @@ impl RemoteServerProjects {
                 self.mode = Mode::CreateRemoteServer(new_state);
                 cx.notify();
             }
+            #[cfg(feature = "dev-container")]
             Mode::CreateRemoteDevContainer(CreateRemoteDevContainer {
                 progress: DevContainerCreationProgress::Error(_),
                 ..
@@ -1938,7 +1964,10 @@ impl RemoteServerProjects {
                 cx.emit(DismissEvent);
             }
             _ => {
-                self.dev_container_task = None;
+                #[cfg(feature = "dev-container")]
+                {
+                    self.dev_container_task = None;
+                }
                 self.allow_dismissal = true;
                 self.mode = Mode::default_mode(&self.ssh_config_servers, cx);
                 self.focus_handle(cx).focus(window, cx);
@@ -2142,6 +2171,7 @@ impl RemoteServerProjects {
         });
     }
 
+    #[cfg(feature = "dev-container")]
     fn edit_in_dev_container_json(
         &mut self,
         config: Option<DevContainerConfig>,
@@ -2195,6 +2225,7 @@ impl RemoteServerProjects {
         cx.notify();
     }
 
+    #[cfg(feature = "dev-container")]
     fn init_dev_container_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let configs = self
             .workspace
@@ -2228,6 +2259,7 @@ impl RemoteServerProjects {
         }
     }
 
+    #[cfg(feature = "dev-container")]
     fn open_dev_container(
         &mut self,
         config: Option<DevContainerConfig>,
@@ -2317,6 +2349,7 @@ impl RemoteServerProjects {
         }));
     }
 
+    #[cfg(feature = "dev-container")]
     fn render_create_dev_container(
         &self,
         state: &CreateRemoteDevContainer,
@@ -2450,6 +2483,7 @@ impl RemoteServerProjects {
         }
     }
 
+    #[cfg(feature = "dev-container")]
     fn render_config_selection(
         &self,
         window: &mut Window,
@@ -3099,6 +3133,7 @@ impl Render for RemoteServerProjects {
                 Mode::CreateRemoteServer(state) => self
                     .render_create_remote_server(state, window, cx)
                     .into_any_element(),
+                #[cfg(feature = "dev-container")]
                 Mode::CreateRemoteDevContainer(state) => self
                     .render_create_dev_container(state, window, cx)
                     .into_any_element(),
@@ -3153,6 +3188,7 @@ mod filter_tests {
 mod create_host_tests {
     use super::*;
     use gpui::TestAppContext;
+    use workspace::AppState;
 
     fn init_test(cx: &mut TestAppContext) -> Arc<AppState> {
         cx.update(|cx| {

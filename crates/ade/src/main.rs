@@ -613,6 +613,7 @@ fn main() {
         snippet_provider::init(cx);
 
         recent_projects::init(cx);
+        #[cfg(feature = "dev-container")]
         dev_container::init(cx);
 
         load_embedded_fonts(cx);
@@ -1079,6 +1080,9 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 
     let mut task = None;
     let dev_container = request.dev_container;
+    if dev_container && !cfg!(feature = "dev-container") {
+        log::warn!("this build of Ade has no dev container support; opening the project locally");
+    }
     if !request.open_paths.is_empty() || !request.diff_paths.is_empty() {
         let app_state = app_state.clone();
         let base_open_options = ade::open_options_for_request(
