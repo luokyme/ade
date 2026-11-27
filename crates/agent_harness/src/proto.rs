@@ -466,6 +466,10 @@ pub enum AgentEvent {
     Compacting {
         active: bool,
     },
+    /// Subscription usage the agent reported itself, so Ade needn't query it with the login.
+    PlanUsage {
+        usage: crate::usage::PlanUsage,
+    },
     #[serde(rename_all = "camelCase")]
     TaskStarted {
         task_id: String,

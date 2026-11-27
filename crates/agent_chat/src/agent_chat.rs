@@ -107,6 +107,11 @@ impl AgentKind {
             AgentKind::Opencode | AgentKind::Antigravity => false,
         }
     }
+
+    /// Claude reports its plan usage while it works, so only Codex is asked with the user's login.
+    pub(crate) fn polls_plan_usage(self) -> bool {
+        self == AgentKind::Codex
+    }
 }
 
 /// `shell_env_loaded` resolves once the login shell's PATH is applied, so agent CLIs can be found.

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use i18n::t;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -12,14 +13,27 @@ use crate::HarnessId;
 pub const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 pub const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UsageWindow {
     pub label: String,
     pub used_fraction: f32,
     pub resets_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl UsageWindow {
+    /// Usage reported by the agent can be hours old, and a window that has reset since is empty.
+    pub fn current_fraction(&self, now: DateTime<Utc>) -> f32 {
+        if self.resets_at.is_some_and(|resets_at| resets_at <= now) {
+            0.0
+        } else {
+            self.used_fraction.clamp(0.0, 1.0)
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanUsage {
     pub windows: Vec<UsageWindow>,
     pub plan_label: Option<String>,
@@ -28,9 +42,10 @@ pub struct PlanUsage {
 impl PlanUsage {
     /// The most-used window.
     pub fn used_fraction(&self) -> Option<f32> {
+        let now = Utc::now();
         self.windows
             .iter()
-            .map(|window| window.used_fraction.clamp(0.0, 1.0))
+            .map(|window| window.current_fraction(now))
             .reduce(f32::max)
     }
 }
@@ -57,12 +72,7 @@ impl UsageRequest {
 
 pub async fn usage_request(harness: HarnessId) -> Result<UsageRequest, String> {
     match harness {
-        HarnessId::ClaudeCode => {
-            let credentials = read_claude_credentials()
-                .await?
-                .ok_or_else(|| t!("Sign in to Claude Code to see usage").to_string())?;
-            claude_usage_request(&credentials)
-        }
+        HarnessId::ClaudeCode => Err(i18n::translate(CLAUDE_REPORTED_USAGE).to_string()),
         HarnessId::Codex => {
             let auth = read_json(&codex_home().join("auth.json"))
                 .ok_or_else(|| t!("Sign in to Codex to see usage").to_string())?;
@@ -73,6 +83,8 @@ pub async fn usage_request(harness: HarnessId) -> Result<UsageRequest, String> {
     }
 }
 
+pub const CLAUDE_REPORTED_USAGE: &str =
+    i18n::n!("Usage shows up after Claude's next reply.");
 pub const OPENCODE_NO_USAGE: &str = i18n::n!("OpenCode doesn't report plan usage");
 pub const ANTIGRAVITY_NO_USAGE: &str = i18n::n!("Antigravity doesn't report plan usage");
 
@@ -163,26 +175,6 @@ pub(crate) fn claude_keychain_service(config_dir: Option<&Path>) -> String {
             format!("Claude Code-credentials-{}", &hex[..8])
         }
     }
-}
-
-/// Keychain first, matching Claude Code's own precedence.
-async fn read_claude_credentials() -> Result<Option<Value>, String> {
-    let config_dir = env_dir("CLAUDE_CONFIG_DIR");
-    let default_dir = crate::executable::home_or_current_dir().join(".claude");
-    let file = config_dir
-        .as_deref()
-        .unwrap_or(default_dir.as_path())
-        .join(".credentials.json");
-    #[cfg(target_os = "macos")]
-    {
-        let service = claude_keychain_service(config_dir.as_deref());
-        match keychain::read_credentials(&service).await {
-            Ok(Some(credentials)) => return Ok(Some(credentials)),
-            Ok(None) => {}
-            Err(warning) => return read_json(&file).map(Some).ok_or(warning),
-        }
-    }
-    Ok(read_json(&file))
 }
 
 #[cfg(target_os = "macos")]
@@ -318,6 +310,26 @@ fn codex_usage_snapshot(body: &Value) -> Option<PlanUsage> {
     })
 }
 
+/// Reads the `unifiedWindows` of Claude Code's `rate_limit_event`, whose utilization is a fraction.
+pub(crate) fn claude_reported_usage(windows: &Value) -> Option<PlanUsage> {
+    let windows: Vec<UsageWindow> = [("five_hour", t!("Session")), ("seven_day", t!("Week"))]
+        .into_iter()
+        .filter_map(|(key, label)| {
+            let window = windows.get(key)?;
+            let utilization = window.get("utilization")?.as_f64()?;
+            Some(UsageWindow {
+                label: label.to_string(),
+                used_fraction: utilization as f32,
+                resets_at: parse_when(window.get("resetsAt")),
+            })
+        })
+        .collect();
+    (!windows.is_empty()).then_some(PlanUsage {
+        windows,
+        plan_label: None,
+    })
+}
+
 fn claude_usage_windows(body: &Value) -> Option<PlanUsage> {
     let mut windows = Vec::new();
     for (key, label) in [("five_hour", t!("Session")), ("seven_day", t!("Week"))] {
@@ -345,7 +357,7 @@ mod tests {
     #[test]
     fn claude_windows_parse_session_and_week() {
         let usage = claude_usage_windows(&json!({
-            "five_hour": {"utilization": 42.0, "resets_at": "2026-10-04T18:00:00Z"},
+            "five_hour": {"utilization": 42.0, "resets_at": "2099-10-04T18:00:00Z"},
             "seven_day": {"utilization": 7.5, "resets_at": null}
         }))
         .unwrap();
@@ -355,6 +367,25 @@ mod tests {
         assert!(usage.windows[0].resets_at.is_some());
         assert_eq!(usage.windows[1].label, "Week");
         assert!((usage.used_fraction().unwrap() - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reported_windows_that_have_reset_count_as_empty() {
+        let now = Utc::now();
+        let window = |resets_at| UsageWindow {
+            label: "Session".into(),
+            used_fraction: 0.6,
+            resets_at,
+        };
+        let reset = window(Some(now - chrono::Duration::minutes(1)));
+        let pending = window(Some(now + chrono::Duration::hours(1)));
+        assert_eq!(reset.current_fraction(now), 0.0);
+        assert!((pending.current_fraction(now) - 0.6).abs() < 1e-6);
+        let usage = PlanUsage {
+            windows: vec![reset, window(None)],
+            plan_label: None,
+        };
+        assert!((usage.used_fraction().unwrap() - 0.6).abs() < 1e-6);
     }
 
     #[test]

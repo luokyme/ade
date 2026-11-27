@@ -210,7 +210,7 @@ fn menu_separator(cx: &App) -> impl IntoElement {
 }
 
 fn usage_meter(window: &UsageWindow, cx: &App) -> gpui::Div {
-    let fraction = window.used_fraction.clamp(0.0, 1.0);
+    let fraction = window.current_fraction(chrono::Utc::now());
     let level = usage_level(fraction);
     let fill = usage_color(level, cx).opacity(match level {
         UsageLevel::Normal => 0.8,
@@ -382,6 +382,7 @@ impl Render for UsageCard {
         let usage = state.and_then(|state| state.usage.clone());
         let error = state.and_then(|state| state.error.clone());
         let loading = state.is_some_and(|state| state.loading);
+        let awaiting_report = usage.is_none() && error.is_none() && !self.kind.polls_plan_usage();
         let plan_label = usage
             .as_ref()
             .and_then(|usage| usage.plan_label.clone())
@@ -424,6 +425,14 @@ impl Render for UsageCard {
                                 .text_size(px(12.))
                                 .text_color(colors.text_muted)
                                 .child(error),
+                        )
+                    })
+                    .when(awaiting_report, |this| {
+                        this.child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(colors.text_muted)
+                                .child(i18n::translate(agent_harness::usage::CLAUDE_REPORTED_USAGE)),
                         )
                     })
                     .when(loading && usage.is_none(), |this| {

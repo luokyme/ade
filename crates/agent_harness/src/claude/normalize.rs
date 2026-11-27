@@ -702,14 +702,22 @@ impl Normalizer {
             }
 
             Frame::RateLimit(f) => {
-                if f.rate_limit_info.status != "rejected" {
-                    return Vec::new();
+                let info = f.rate_limit_info;
+                let mut events: Vec<AgentEvent> = info
+                    .unified_windows
+                    .as_ref()
+                    .and_then(crate::usage::claude_reported_usage)
+                    .map(|usage| AgentEvent::PlanUsage { usage })
+                    .into_iter()
+                    .collect();
+                if info.status == "rejected" {
+                    events.push(AgentEvent::Error {
+                        message: rate_limit_blocked_text(
+                            info.rate_limit_type.as_deref().unwrap_or(""),
+                        ),
+                    });
                 }
-                vec![AgentEvent::Error {
-                    message: rate_limit_blocked_text(
-                        f.rate_limit_info.rate_limit_type.as_deref().unwrap_or(""),
-                    ),
-                }]
+                events
             }
 
             Frame::Result(f) => {
@@ -876,6 +884,28 @@ mod tests {
     fn normalize_one(raw: &str) -> Vec<AgentEvent> {
         let frame = crate::claude::wire::parse_frame(raw).expect("frame parses");
         Normalizer::new().normalize(frame, false)
+    }
+
+    #[test]
+    fn rate_limit_events_report_plan_usage_and_rejections() {
+        let events = normalize_one(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":0.16,"resetsAt":1795762800,"status":"allowed"},"seven_day":{"utilization":0.25,"resetsAt":1795770000,"status":"allowed"}}}}"#,
+        );
+        let [AgentEvent::PlanUsage { usage }] = events.as_slice() else {
+            panic!("expected plan usage, got {events:?}");
+        };
+        assert_eq!(usage.windows.len(), 2);
+        assert_eq!(usage.windows[0].label, "Session");
+        assert!((usage.windows[0].used_fraction - 0.16).abs() < 1e-6);
+        assert_eq!(
+            usage.windows[1].resets_at.map(|resets_at| resets_at.timestamp()),
+            Some(1795770000)
+        );
+
+        let events = normalize_one(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":"full"}}}}"#,
+        );
+        assert!(matches!(events.as_slice(), [AgentEvent::Error { .. }]));
     }
 
     #[test]

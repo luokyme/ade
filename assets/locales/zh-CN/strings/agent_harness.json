@@ -164,6 +164,7 @@
   "Usage is only reported for Claude subscriptions": "仅 Claude 订阅提供用量信息",
   "Usage is rate limited, try again soon": "用量查询受到速率限制，请稍后再试",
   "Usage isn't reported for API keys": "API 密钥不提供用量信息",
+  "Usage shows up after Claude's next reply.": "Claude 下次回复后会显示用量。",
   "Usage unavailable (HTTP {status})": "用量不可用（HTTP {status}）",
   "Use {server}: {tool}?": "要使用 {server}：{tool} 吗？",
   "Use {tool}?": "要使用 {tool} 吗？",

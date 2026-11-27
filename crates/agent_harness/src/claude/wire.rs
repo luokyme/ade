@@ -162,6 +162,9 @@ pub(crate) struct RateLimitInfo {
     pub status: String,
     #[serde(rename = "rateLimitType", default)]
     pub rate_limit_type: Option<String>,
+    /// Kept loose: a malformed window must not drop the frame and its rejection notice.
+    #[serde(rename = "unifiedWindows", default)]
+    pub unified_windows: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]

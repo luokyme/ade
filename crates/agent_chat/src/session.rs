@@ -1119,6 +1119,7 @@ pub enum SessionEvent {
     Finished { errored: bool },
     NeedsInput,
     CommandsReported(Vec<SlashCommand>),
+    PlanUsageReported(PlanUsage),
 }
 
 pub struct AgentSession {
@@ -2517,6 +2518,9 @@ impl AgentSession {
             AgentEvent::AvailableCommands { commands } => {
                 cx.emit(SessionEvent::CommandsReported(commands));
             }
+            AgentEvent::PlanUsage { usage } => {
+                cx.emit(SessionEvent::PlanUsageReported(usage));
+            }
             AgentEvent::Usage { .. }
             | AgentEvent::InputRequested { .. }
             | AgentEvent::InputResolved { .. }
@@ -3794,6 +3798,10 @@ impl AgentStore {
                 }
                 if let Some(usage) = this.plan_usage.get_mut(&kind) {
                     usage.fetched_at = None;
+                    // Another account's usage only arrives with its next reply.
+                    if !kind.polls_plan_usage() {
+                        usage.usage = None;
+                    }
                 }
                 if let Some(catalog) = this.catalogs.get_mut(&kind) {
                     catalog.loaded = false;
@@ -3907,7 +3915,7 @@ impl AgentStore {
     }
 
     pub fn refresh_plan_usage(&mut self, kind: AgentKind, force: bool, cx: &mut Context<Self>) {
-        if !kind.has_plan_usage() {
+        if !kind.polls_plan_usage() {
             return;
         }
         let state = self.plan_usage.entry(kind).or_default();
@@ -4560,6 +4568,14 @@ impl AgentStore {
                 catalog.error = None;
                 catalog.loaded = true;
                 catalog.fetched_at = Some(Instant::now());
+                cx.notify();
+            }
+            SessionEvent::PlanUsageReported(usage) => {
+                let kind = session.read(cx).kind();
+                let state = this.plan_usage.entry(kind).or_default();
+                state.usage = Some(usage.clone());
+                state.error = None;
+                state.fetched_at = Some(Instant::now());
                 cx.notify();
             }
         })
@@ -6633,6 +6649,41 @@ done
             user_texts(&session, cx),
             ["scenario:interrupt", "change of plan"]
         );
+    }
+
+    #[gpui::test]
+    async fn claude_plan_usage_comes_from_its_reports_not_polling(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        let session = store.update(cx, |store, cx| {
+            store.refresh_plan_usage(AgentKind::Claude, true, cx);
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        store.read_with(cx, |store, _| {
+            assert!(store.plan_usage(AgentKind::Claude).is_none());
+        });
+        let usage = agent_harness::usage::PlanUsage {
+            windows: vec![agent_harness::usage::UsageWindow {
+                label: "Session".into(),
+                used_fraction: 0.16,
+                resets_at: None,
+            }],
+            plan_label: None,
+        };
+        session.update(cx, |session, cx| {
+            session.apply_event(
+                AgentEvent::PlanUsage {
+                    usage: usage.clone(),
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        store.read_with(cx, |store, _| {
+            let state = store.plan_usage(AgentKind::Claude).expect("reported usage");
+            assert_eq!(state.usage.as_ref(), Some(&usage));
+            assert!(!state.loading);
+        });
     }
 
     #[gpui::test]
