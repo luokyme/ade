@@ -1124,35 +1124,11 @@
     },
   },
   {
-    "context": "T3Composer > Editor && mode == auto_height",
-    "bindings": {
-      "enter": "t3_chat::Send",
-      "shift-enter": "editor::Newline",
-      "ctrl-enter": "t3_chat::Steer",
-    },
-  },
-  {
-    "context": "T3Composer",
-    "bindings": {
-      "escape": "t3_chat::Stop",
-    },
-  },
-  {
-    "context": "T3Composer && t3_completion > Editor",
-    "bindings": {
-      "up": "t3_chat::SelectPreviousCompletion",
-      "down": "t3_chat::SelectNextCompletion",
-      "enter": "t3_chat::AcceptCompletion",
-      "tab": "t3_chat::AcceptCompletion",
-      "escape": "t3_chat::DismissCompletion",
-    },
-  },
-  {
     "context": "AgentComposer && !send_with_modifier > Editor && mode == auto_height",
     "bindings": {
       "enter": "agent_chat::Send",
       "shift-enter": "editor::Newline",
-      "ctrl-enter": "agent_chat::Send",
+      "ctrl-enter": "agent_chat::SendAlternate",
     },
   },
   {

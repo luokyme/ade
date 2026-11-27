@@ -15,7 +15,8 @@ mod side_pane;
 mod todo_panel;
 
 use crate::{
-    AgentChatSettings, MoveChatToPanel, MoveChatToTab, RenameChat, Send, Stop, SubmitAnswer,
+    AgentChatSettings, MoveChatToPanel, MoveChatToTab, RenameChat, Send, SendAlternate, Stop,
+    SubmitAnswer,
     chat_style::{
         Chip, accent, flavour_seed, flavour_word, format_elapsed, gradient_spinner, hairline, ink,
         mix, page, text_faint, ui, wash, working_animation,
@@ -829,6 +830,14 @@ impl ChatView {
     }
 
     fn send(&mut self, _: &Send, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit(false, window, cx);
+    }
+
+    fn send_alternate(&mut self, _: &SendAlternate, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit(true, window, cx);
+    }
+
+    fn submit(&mut self, alternate: bool, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).text(cx);
         if self.session.read(cx).is_deleted() || self.staging_count > 0 {
             return;
@@ -870,8 +879,10 @@ impl ChatView {
             self.save_queued_edit(prompt, window, cx);
             return;
         }
-        self.session
-            .update(cx, |session, cx| session.send_message(prompt, cx));
+        let steer = AgentChatSettings::get_global(cx).steer_while_working != alternate;
+        self.session.update(cx, |session, cx| {
+            session.send_message_steering(prompt, steer, cx)
+        });
         self.glide_to_bottom(cx);
     }
 
@@ -4045,6 +4056,7 @@ impl Render for ChatView {
             .children(self.render_lightbox(cx))
             .children(self.render_link_menu())
             .on_action(cx.listener(Self::send))
+            .on_action(cx.listener(Self::send_alternate))
             .on_action(cx.listener(Self::stop))
             .on_action(cx.listener(Self::submit_answer))
             .on_action(cx.listener(Self::select_previous_command))

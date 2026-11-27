@@ -18,7 +18,6 @@
 | [memory/git-ui.md](memory/git-ui.md) | Git 面板的用户偏好与 Repositories 范围确认 |
 | [memory/local-deploy.md](memory/local-deploy.md) | 本机部署 Ade 的可行路径、资源加载限制与远端仓库现状 |
 | [memory/upstream-sync.md](memory/upstream-sync.md) | 上游 Wu 的同步位置、功能冲突处理与增量合并 |
-| [memory/t3-frontend.md](memory/t3-frontend.md) | T3 Code 前端对接的进度、未做事项与隔离测试环境 |
 
 ## 设计决策
 
@@ -35,7 +34,7 @@
 | [decisions/product-name.md](decisions/product-name.md) | PRODUCT | 产品名称 Ade：crate、动作命名空间、URL scheme、环境变量与目录的统一命名；应用名称和桌面标识不加 Dev 后缀 |
 | [decisions/git-commit-messages.md](decisions/git-commit-messages.md) | COMMIT | Git 面板默认生成中文 Conventional Commits 提交消息 |
 | [decisions/git-panel.md](decisions/git-panel.md) | GITUI | Git 面板分区、历史记录、工作区与历史差异页 |
-| [decisions/t3-frontend.md](decisions/t3-frontend.md) | T3 | Ade 作为 T3 Code 前端的架构边界，与现有“对话”功能并行；对话可放在侧边面板或编辑区 |
+| [decisions/t3-frontend.md](decisions/t3-frontend.md) | T3 | 已废止：T3 Code 前端对接（已移除，对话只保留 Ade 自己的“对话”功能） |
 
 # Rust coding guidelines
 

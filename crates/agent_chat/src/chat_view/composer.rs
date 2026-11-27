@@ -23,6 +23,11 @@ const QUESTION_COLLAPSE_CHARS: usize = 160;
 const QUESTION_EXPANDED_FRACTION: f32 = 0.4;
 const QUESTION_EXPANDED_FALLBACK: f32 = 280.;
 const QUESTION_OPTIONS_FRACTION: f32 = 0.3;
+const SECONDARY_MODIFIER: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
 
 pub(super) fn tray_surface(cx: &App) -> gpui::Div {
     div()
@@ -114,6 +119,7 @@ impl ChatView {
     pub(super) fn render_send_button(&self, cx: &Context<Self>) -> AnyElement {
         let colors = cx.theme().colors();
         let is_working = self.session.read(cx).is_working();
+        let steers = AgentChatSettings::get_global(cx).steer_while_working;
         let has_text = self.staging_count == 0
             && (!self.composer.read(cx).text(cx).trim().is_empty() || !self.attachments.is_empty());
         let focus_handle = self.composer.focus_handle(cx);
@@ -143,19 +149,32 @@ impl ChatView {
             .when(has_text, |this| {
                 this.cursor_pointer()
                     .hover(|style| style.opacity(0.85))
-                    .on_click(cx.listener(|this, _, window, cx| this.send(&Send, window, cx)))
+                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                        this.submit(event.modifiers().secondary(), window, cx)
+                    }))
             })
             .tooltip(move |_, cx| {
-                Tooltip::for_action_in(
-                    if is_working {
-                        t!("Queue message")
-                    } else {
-                        t!("Send message")
-                    },
-                    &Send,
-                    &focus_handle,
-                    cx,
-                )
+                if !is_working {
+                    return Tooltip::for_action_in(t!("Send message"), &Send, &focus_handle, cx);
+                }
+                let (title, alternate) = if steers {
+                    (
+                        t!("Steer"),
+                        t!(
+                            "{modifier}-click to queue it instead",
+                            modifier = SECONDARY_MODIFIER
+                        ),
+                    )
+                } else {
+                    (
+                        t!("Queue message"),
+                        t!(
+                            "{modifier}-click to steer the current turn instead",
+                            modifier = SECONDARY_MODIFIER
+                        ),
+                    )
+                };
+                Tooltip::with_meta_in(title, Some(&Send), alternate, &focus_handle, cx)
             })
             .child(icon(IconName::AgentSend, px(14.), plate))
             .into_any_element()

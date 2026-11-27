@@ -42,7 +42,6 @@ pub enum IconName {
     AgentPin,
     AgentRestart,
     AgentSend,
-    AgentDockRight,
     AgentSplitRight,
     AgentStar,
     AgentStarFilled,

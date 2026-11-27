@@ -1495,6 +1495,18 @@ impl AgentSession {
     }
 
     pub fn send_message(&mut self, prompt: impl Into<Prompt>, cx: &mut Context<Self>) {
+        let steer = AgentChatSettings::get_global(cx).steer_while_working;
+        self.send_message_steering(prompt, steer, cx);
+    }
+
+    /// Sends like `send_message`, but `steer` picks whether a message sent while the agent works
+    /// goes into the running turn or waits in the queue.
+    pub fn send_message_steering(
+        &mut self,
+        prompt: impl Into<Prompt>,
+        steer: bool,
+        cx: &mut Context<Self>,
+    ) {
         let mut prompt = prompt.into();
         prompt.text = prompt.text.trim().to_string();
         if prompt.is_empty() || self.deleted {
@@ -1507,7 +1519,7 @@ impl AgentSession {
         }
         let stopping = self.run.as_ref().is_some_and(ActiveRun::stopping);
         if self.working && self.run.is_some() && !stopping {
-            if AgentChatSettings::get_global(cx).steer_while_working {
+            if steer {
                 self.deliver(prompt, cx);
             } else {
                 self.enqueue(prompt, cx);
@@ -6621,6 +6633,45 @@ done
             user_texts(&session, cx),
             ["scenario:interrupt", "change of plan"]
         );
+    }
+
+    #[gpui::test]
+    async fn a_message_sent_while_working_can_override_the_steering_setting(
+        cx: &mut TestAppContext,
+    ) {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let store = new_store(directory.path(), cx);
+        use_quick_stopping_claude(&store, cx);
+        let session = store.update(cx, |store, cx| {
+            store.create_session(AgentKind::Claude, directory.path().to_path_buf(), cx)
+        });
+        session.update(cx, |session, cx| {
+            session.send_message("scenario:interrupt", cx)
+        });
+        run_until(cx, |cx| {
+            session.read_with(cx, |session, _| session.run.is_some())
+        });
+        session.update(cx, |session, cx| {
+            session.send_message_steering("steered", true, cx);
+            session.send_message("queued", cx);
+        });
+        assert_eq!(user_texts(&session, cx), ["scenario:interrupt", "steered"]);
+
+        update_chat_settings(cx, |content| {
+            content.while_working = Some(settings::AgentChatWhileWorking::Steer);
+        });
+        session.update(cx, |session, cx| {
+            session.send_message_steering("also queued", false, cx)
+        });
+        let queued: Vec<String> = session.read_with(cx, |session, _| {
+            session
+                .queue()
+                .iter()
+                .map(|queued| queued.prompt.text.clone())
+                .collect()
+        });
+        assert_eq!(queued, ["queued", "also queued"]);
+        assert_eq!(user_texts(&session, cx), ["scenario:interrupt", "steered"]);
     }
 
     #[gpui::test]

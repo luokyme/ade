@@ -241,7 +241,6 @@ dependencies = [
  "svg_preview",
  "sysinfo",
  "system_specs",
- "t3_chat",
  "tab_switcher",
  "tabular_data_preview",
  "tasks_ui",
@@ -12085,58 +12084,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "t3_chat"
-version = "0.1.0"
-dependencies = [
- "agent_harness",
- "anyhow",
- "chrono",
- "db",
- "editor",
- "file_icons",
- "futures",
- "fuzzy_nucleo",
- "gpui",
- "gpui_tokio",
- "http_client",
- "i18n",
- "language",
- "log",
- "markdown",
- "menu",
- "paths",
- "project",
- "serde_json",
- "settings",
- "t3_client",
- "theme",
- "theme_settings",
- "tokio",
- "ui",
- "util",
- "workspace",
-]
-
-[[package]]
-name = "t3_client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-tungstenite",
- "futures",
- "libc",
- "log",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "tokio",
- "tokio-util",
- "url",
- "uuid",
- "zed-reqwest",
-]
-
-[[package]]
 name = "tab_switcher"
 version = "0.1.0"
 dependencies = [
@@ -12810,7 +12757,6 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
  "pin-project-lite",
  "tokio",

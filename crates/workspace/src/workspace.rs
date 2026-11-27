@@ -9851,34 +9851,15 @@ pub enum AgentActivity {
 pub struct AgentActivityChanges;
 
 pub struct ProjectAgentActivity {
-    sources: Vec<fn(&[PathBuf], &App) -> Option<AgentActivity>>,
-    changes: Entity<AgentActivityChanges>,
+    pub activity: fn(&[PathBuf], &App) -> Option<AgentActivity>,
+    pub changes: Entity<AgentActivityChanges>,
 }
 
 impl Global for ProjectAgentActivity {}
 
-/// Adds a source of agent activity, such as a chat backend. The project indicator shows the most
-/// urgent activity across all sources.
-pub fn register_agent_activity_source(
-    source: fn(&[PathBuf], &App) -> Option<AgentActivity>,
-    cx: &mut App,
-) {
-    if !cx.has_global::<ProjectAgentActivity>() {
-        let changes = cx.new(|_| AgentActivityChanges);
-        cx.set_global(ProjectAgentActivity {
-            sources: Vec::new(),
-            changes,
-        });
-    }
-    cx.global_mut::<ProjectAgentActivity>().sources.push(source);
-}
-
 pub fn project_agent_activity(roots: &[PathBuf], cx: &App) -> Option<AgentActivity> {
-    cx.try_global::<ProjectAgentActivity>()?
-        .sources
-        .iter()
-        .filter_map(|source| source(roots, cx))
-        .max()
+    cx.try_global::<ProjectAgentActivity>()
+        .and_then(|activity| (activity.activity)(roots, cx))
 }
 
 pub fn agent_activity_changes(cx: &App) -> Option<Entity<AgentActivityChanges>> {

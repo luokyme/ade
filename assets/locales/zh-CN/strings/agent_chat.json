@@ -244,6 +244,8 @@
   "{hours}h {minutes}m": "{hours} 小时 {minutes} 分",
   "{label} ({count})": "{label}（{count}）",
   "{minutes}m {seconds}s": "{minutes} 分 {seconds} 秒",
+  "{modifier}-click to queue it instead": "按住 {modifier} 点击则改为加入队列",
+  "{modifier}-click to steer the current turn instead": "按住 {modifier} 点击则改为引导当前这一轮",
   "{path} is larger than 24 MB": "{path} 超过 24 MB",
   "{seconds}s": "{seconds} 秒",
   "{used} / {total} tokens": "{used} / {total} 个 token",

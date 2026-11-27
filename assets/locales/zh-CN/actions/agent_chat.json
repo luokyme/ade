@@ -51,6 +51,10 @@
     "name": "发送",
     "description": "发送对话输入框中的消息。"
   },
+  "agent_chat::SendAlternate": {
+    "name": "发送（切换引导或排队）",
+    "description": "发送消息；默认排队时改为插入正在运行的这一轮，默认插入时改为加入队列。"
+  },
   "agent_chat::Stop": {
     "name": "停止",
     "description": "停止智能体当前这一轮的回复。"

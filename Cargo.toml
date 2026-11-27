@@ -142,8 +142,6 @@ members = [
     "crates/svg_preview",
     "crates/syntax_theme",
     "crates/system_specs",
-    "crates/t3_chat",
-    "crates/t3_client",
     "crates/tab_switcher",
     "crates/tabular_data_preview",
     "crates/task",
@@ -336,8 +334,6 @@ sum_tree = { path = "crates/sum_tree" }
 svg_preview = { path = "crates/svg_preview" }
 syntax_theme = { path = "crates/syntax_theme" }
 system_specs = { path = "crates/system_specs" }
-t3_chat = { path = "crates/t3_chat" }
-t3_client = { path = "crates/t3_client" }
 tab_switcher = { path = "crates/tab_switcher" }
 tabular_data_preview = { path = "crates/tabular_data_preview"}
 task = { path = "crates/task" }

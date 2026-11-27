@@ -22,7 +22,7 @@ pub use commit_message::{
 use command_palette_hooks::CommandPaletteFilter;
 use futures::FutureExt as _;
 use gpui::{
-    App, EntityId, PromptButton, PromptLevel, TaskExt as _, WindowHandle, actions,
+    App, AppContext as _, EntityId, PromptButton, PromptLevel, TaskExt as _, WindowHandle, actions,
 };
 use i18n::t;
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,9 @@ actions!(
         ContinueSavedChat,
         /// Sends the message in the chat box.
         Send,
+        /// Sends the message, steering the running turn when messages queue by default, or
+        /// queueing it when they steer.
+        SendAlternate,
         /// Stops the agent's current turn.
         Stop,
         /// Answers the agent's question and moves to the next one, or submits on the last.
@@ -112,7 +115,11 @@ pub fn init(shell_env_loaded: Option<futures::channel::oneshot::Receiver<()>>, c
         cx.set_global(session::ShellEnvLoaded(loaded.shared()));
     }
     cx.set_global(workspace::QuitWarning(session::quit_warning));
-    workspace::register_agent_activity_source(session::project_agent_activity, cx);
+    let changes = cx.new(|_| workspace::AgentActivityChanges);
+    cx.set_global(workspace::ProjectAgentActivity {
+        activity: session::project_agent_activity,
+        changes,
+    });
     agent_panel::init(cx);
     chat_panel::init(cx);
     watch_enabled(cx);

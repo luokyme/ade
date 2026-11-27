@@ -290,12 +290,6 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     fn can_split(&self) -> bool {
         false
     }
-
-    /// Extra buttons shown at the end of the tab bar while this item is active.
-    fn tab_bar_buttons(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Vec<AnyElement> {
-        Vec::new()
-    }
-
     fn clone_on_split(
         &self,
         workspace_id: Option<WorkspaceId>,
@@ -549,7 +543,6 @@ pub trait ItemHandle: 'static + Send {
     fn buffer_kind(&self, cx: &App) -> ItemBufferKind;
     fn boxed_clone(&self) -> Box<dyn ItemHandle>;
     fn can_split(&self, cx: &App) -> bool;
-    fn tab_bar_buttons(&self, window: &mut Window, cx: &mut App) -> Vec<AnyElement>;
     fn clone_on_split(
         &self,
         workspace_id: Option<WorkspaceId>,
@@ -770,10 +763,6 @@ impl<T: Item> ItemHandle for Entity<T> {
 
     fn can_split(&self, cx: &App) -> bool {
         self.read(cx).can_split()
-    }
-
-    fn tab_bar_buttons(&self, window: &mut Window, cx: &mut App) -> Vec<AnyElement> {
-        self.update(cx, |item, cx| item.tab_bar_buttons(window, cx))
     }
 
     fn clone_on_split(
